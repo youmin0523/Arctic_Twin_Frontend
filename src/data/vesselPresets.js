@@ -1,0 +1,33 @@
+// ═══════════════════════════════════════════════════════════════
+// Vessel (Ship) Presets and Base Constants
+// Extracted from arctic-hybrid.html lines 2572-2597
+// ═══════════════════════════════════════════════════════════════
+
+export const SHIP_PRESETS = {
+  bulk: {
+    type: 'bulk',
+    disp: 55000,
+    len: 225,
+    width: 32,
+    gm: 3.8,
+    iceClass: 'Arc4',
+    draft: 14.5,
+  },
+  lng: { type: 'lng', disp: 95000, len: 295, width: 46, gm: 5.1, iceClass: 'PC4', draft: 12.0 },
+  container: {
+    type: 'container',
+    disp: 55000,
+    len: 240,
+    width: 38,
+    gm: 4.3,
+    iceClass: 'NONE',
+    draft: 14.2,
+  },
+};
+
+export const BASE_DISP = 20000;
+export const BASE_LEN = 160;
+export const BASE_WIDTH = 28;
+export const BASE_GM = 3.2;
+export const BASE_OMEGA_R = 0.176;
+export const BASE_OMEGA_P = 0.21;
