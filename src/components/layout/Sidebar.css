@@ -18,6 +18,35 @@
 .dt-sidebar--right {
   border-right: none;
   border-left: 1px solid var(--border);
+  /* 미니맵 고정을 위해 우측 사이드바는 flex 컬럼 + 자체 스크롤 비활성 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 우측 사이드바 스크롤 영역 (현재 위치 미니맵 제외) */
+.dt-sidebar__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.dt-sidebar__scroll::-webkit-scrollbar { width: 4px; }
+.dt-sidebar__scroll::-webkit-scrollbar-track { background: transparent; }
+.dt-sidebar__scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* 하단 고정 섹션 (현재 위치 미니맵) — 스크롤에서 제외, 항상 표시 */
+.dt-sidebar__section--pinned {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+
+/* Live(자동 항해) / Voyage(재생 컨트롤) 모드 섹션 — 토글 시 해역 기상 시작 위치가
+   동일하도록 동일한 최소 높이를 할당 */
+.dt-sidebar__section--mode {
+  min-height: 198px;
+  justify-content: flex-start;
 }
 
 /* 우측 사이드바 섹션은 내부 콘텐츠를 가운데 정렬 */

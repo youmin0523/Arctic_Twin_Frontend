@@ -21,7 +21,6 @@ import RLProgressOverlay from './components/hud/RLProgressOverlay';
 import TrendReportProgressOverlay from './components/hud/TrendReportProgressOverlay';
 import TrendReportPanel from './components/hud/TrendReportPanel';
 import WhatIfPanel from './components/hud/WhatIfPanel';
-import SarTrainingPanel from './components/hud/SarTrainingPanel';
 import FuelAnalysisPanel from './components/hud/FuelAnalysisPanel';
 import Header from './components/layout/Header';
 import Sidebar from './components/layout/Sidebar';
@@ -68,6 +67,8 @@ import {
   rerouteAroundIceberg,
 } from './services/icebergAvoidance';
 import { createRLAvoidanceController } from './services/rlAvoidanceController';
+import { landAhead, initLandMask } from './services/arcticPathfinder';
+import ProximityWarningOverlay from './components/hud/ProximityWarningOverlay';
 import useVoyagePlayback from './hooks/useVoyagePlayback';
 import VoyagePlaybackLayer from './components/VoyagePlayback/VoyagePlaybackLayer';
 import VoyageHUD from './components/VoyagePlayback/VoyageHUD';
@@ -85,6 +86,14 @@ import {
   nearestWaveAt,
 } from './services/derivedMetrics';
 import './components/VoyagePlayback/voyagePlayback.css';
+
+// 빙하 아카이브 선택 key('live' | '2023-MM') → Voyage 트레이스 월(1~12).
+// 'live' 는 현재 달력 월에 매핑 (빙하 오버레이와 동일 월 정렬).
+function archiveKeyToMonth(key) {
+  if (!key || key === 'live') return new Date().getMonth() + 1;
+  const m = /^\d{4}-(\d{2})$/.exec(key);
+  return m ? parseInt(m[1], 10) : 3;
+}
 
 function AppInner() {
   const state = useAppState();
@@ -112,6 +121,17 @@ function AppInner() {
   const currentRio = voyage.trace
     ? (sampleShipAt(voyage.trace, voyage.tHours) || {}).rio
     : 0;
+
+  // 빙하 아카이브 월 ↔ Voyage 트레이스 동기화.
+  // voyage 모드에서 아카이브 드롭다운(state.cachedIceKey)이 바뀌면
+  // 같은 월의 항해 트레이스로 재로드 (현재 클래스 유지).
+  useEffect(() => {
+    if (appMode !== 'voyage' || !voyage.trace) return;
+    const m = archiveKeyToMonth(state.cachedIceKey);
+    if (m !== voyage.month) {
+      voyage.setVoyageMonth(m);
+    }
+  }, [appMode, state.cachedIceKey, voyage.trace, voyage.month, voyage.setVoyageMonth]);
 
   // 아라온 HUD 정보 — voyage 모드면 trace 에서 보간, 아니면 Wrangel 정적값
   const ARAON_STATUS_KO = {
@@ -520,6 +540,35 @@ function AppInner() {
           ? `전방 빙산 접근 중 — ${Math.round(nearestIce)}m`
           : '';
 
+    // ── 빙하/육지 근접 경고 (전체화면 빨간 경고용) ──────────────
+    let pType = null;
+    let pLevel = 'none';
+    let pDist = Infinity;
+    let pMsg = '';
+    // 빙하 (미터 단위)
+    if (nearestIce < 200) {
+      pType = 'iceberg'; pLevel = 'critical'; pDist = nearestIce;
+      pMsg = `거리 ${Math.round(nearestIce)}m`;
+    } else if (nearestIce < 500) {
+      pType = 'iceberg'; pLevel = 'warning'; pDist = nearestIce;
+      pMsg = `거리 ${Math.round(nearestIce)}m`;
+    }
+    // 육지 (전방 스캔, km 단위) — 빙하보다 임박할 때만 승격
+    const landP = landAhead(lat, lon, state.shipState.heading || 0, 120, 10);
+    if (landP.blocked) {
+      if (landP.distanceKm < 12 && pLevel !== 'critical') {
+        pType = 'land'; pLevel = 'critical'; pDist = landP.distanceKm * 1000;
+        pMsg = `전방 ${Math.round(landP.distanceKm)}km`;
+      } else if (landP.distanceKm < 40 && pLevel === 'none') {
+        pType = 'land'; pLevel = 'warning'; pDist = landP.distanceKm * 1000;
+        pMsg = `전방 ${Math.round(landP.distanceKm)}km`;
+      }
+    }
+    dispatch({
+      type: 'SET_PROXIMITY_ALERT',
+      payload: { level: pLevel, type: pType, distM: pDist, message: pMsg },
+    });
+
     dispatch({
       type: 'UPDATE_HUD',
       payload: {
@@ -616,8 +665,14 @@ function AppInner() {
 
   // ── 항구/경로 변경 시 동적 경로 생성 ──────────────────────────
   useEffect(() => {
-    // 기본 부산-로테르담이 아닌 경우에만 동적 경로 생성
-    if (state.departurePort === 'BUSAN' && state.arrivalPort === 'ROTTERDAM') {
+    // 기본 부산-로테르담이 아닌 경우에만 동적 경로 생성.
+    // 단, ETC(기타) 항로는 기본 항구 조합에서도 직선 경로를 동적 생성해야 한다
+    // (ROUTES 에 ETC 데이터가 없어 NSR 로 폴백되던 문제 방지).
+    if (
+      state.currentRouteKey !== 'ETC' &&
+      state.departurePort === 'BUSAN' &&
+      state.arrivalPort === 'ROTTERDAM'
+    ) {
       if (state.generatedWaypoints) {
         dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
       }
@@ -654,6 +709,15 @@ function AppInner() {
       cancelled = true;
     };
   }, [state.departurePort, state.arrivalPort, state.currentRouteKey]);
+
+  // ── 육지 마스크 사전 로드 (육지 회피/경고용) ──────────────────
+  useEffect(() => {
+    initLandMask().catch(() => {});
+  }, []);
+
+  // RL 회피 강조 활성 여부 (계산 중이거나 회피 상태일 때)
+  const avoidanceActive =
+    state.avoidance?.active || state.isRerouting || false;
 
   // ── RL 기반 빙산 회피 컨트롤러 (2초 간격) ──────────────────────
   const rlControllerRef = useRef(null);
@@ -1108,12 +1172,11 @@ function AppInner() {
         const routeKeys = ['NSR', 'NWP', 'TSR', 'SUEZ', 'CAPE', 'ETC'];
         const results = await Promise.all(
           routeKeys.map(async (key) => {
+            // 동일 지역 항구는 표준 북극/대체 항로가 무의미 — ETC(직선)만 계산
             if (isSameRegion(depPort.id, arrPort.id) && key !== 'ETC') {
               return { key, dist: '-' };
             }
-            if (!isSameRegion(depPort.id, arrPort.id) && key === 'ETC') {
-              return { key, dist: '-' };
-            }
+            // ETC 는 항상 출발↔도착 직선(대권) 거리를 계산 (기본 항구 조합 포함)
             const wps = await generateRoute(depPort, arrPort, key, null, []); // 해빙 데이터 없이 빠른 생성
             return { key, dist: calculateRouteDistanceKM(wps) };
           }),
@@ -1554,8 +1617,12 @@ function AppInner() {
 
       // 새 항로의 첫 waypoint와 두 번째 waypoint 사이의 bearing 으로 초기 heading 설정
       // (출발항에서 즉시 정확한 방향 표시 — 다음 sim tick 까지 깜빡임 방지)
-      const newWps = ROUTES[routeKey] || ROUTES.NSR;
       const depPort = PORTS[state.departurePort] || PORTS.BUSAN;
+      // ETC(기타) 는 ROUTES 데이터가 없으므로 출발항→도착항 직선 방향을 사용
+      const newWps =
+        routeKey === 'ETC'
+          ? [depPort, PORTS[state.arrivalPort] || PORTS.ROTTERDAM]
+          : ROUTES[routeKey] || ROUTES.NSR;
       let initHdgDeg = 0;
       if (newWps.length >= 2) {
         const a = newWps[0];
@@ -1587,7 +1654,7 @@ function AppInner() {
         threeRef.current.shipPivot.rotation.y = -(initHdgDeg * Math.PI) / 180;
       }
     },
-    [dispatch, state.departurePort],
+    [dispatch, state.departurePort, state.arrivalPort],
   );
 
   const handleSpecChange = useCallback(
@@ -1606,10 +1673,23 @@ function AppInner() {
   );
 
   // 제원 적용 버튼 — 모달 오픈
-  const handleApplySpecs = useCallback((polarParams) => {
-    setPendingPolarParams(polarParams);
-    setShowSpecsModal(true);
-  }, []);
+  // coldRoute(기온 -10°C↓)는 수동 입력이 아니라 현재 항로의 실시간 기상 데이터로 자동 판정.
+  // (sanctioned는 선적국 속성이라 수동 체크박스 입력값을 그대로 사용)
+  const handleApplySpecs = useCallback(
+    (polarParams) => {
+      const autoColdRoute =
+        weatherData?.routes?.[state.currentRouteKey]?.route_summary
+          ?.is_temp_below_minus_10 ??
+        weatherData?.route_summary?.is_temp_below_minus_10 ??
+        false;
+      setPendingPolarParams({
+        ...polarParams,
+        checks: { ...polarParams.checks, coldRoute: autoColdRoute },
+      });
+      setShowSpecsModal(true);
+    },
+    [weatherData, state.currentRouteKey],
+  );
 
   // FOV
   const handleFovChange = useCallback(
@@ -2556,6 +2636,7 @@ function AppInner() {
             routeVisibility={routeVisibility}
             generatedRoutes={generatedRoutes}
             rlShips={rlShips}
+            avoidanceActive={avoidanceActive}
           />
           <ThreeOverlay
             ref={threeRef}
@@ -2656,6 +2737,15 @@ function AppInner() {
             departurePort={PORTS[state.departurePort] || PORTS.BUSAN}
             arrivalPort={PORTS[state.arrivalPort] || PORTS.ROTTERDAM}
             araonPos={araonDisplayPos}
+            icebergs={realBergsRef.current}
+            avoiding={avoidanceActive}
+            avoidanceType={state.avoidance?.type}
+          />
+
+          {/* 빙하/육지 근접 경고 + RL 회피 강조 (모든 카메라 모드 위) */}
+          <ProximityWarningOverlay
+            proximityAlert={state.proximityAlert}
+            avoidance={state.avoidance}
           />
 
           {/* VoyageInfoPanel — Voyage/Live 이중 모드, 사용자가 X로 닫을 수 있음 */}
@@ -2703,11 +2793,12 @@ function AppInner() {
           {activePanel === 'whatif' && (
             <WhatIfPanel route={state.currentRouteKey} iceClass={state.shipSpecs?.iceClass || 'PC5'} />
           )}
-          {activePanel === 'sar' && <SarTrainingPanel />}
         </div>
 
         {/* ═══ Right Sidebar — 좌측 Sidebar와 대칭 구조 (static flex item) ═══ */}
         <aside className="dt-sidebar dt-sidebar--right">
+          {/* 스크롤 영역 (현재 위치 미니맵 제외) */}
+          <div className="dt-sidebar__scroll">
           {/* ── 1. Simulation Mode 토글 (같은 버튼 재클릭 → 해당 모드 패널 on/off) ── */}
           <section className="dt-sidebar__section">
             <span className="dt-sidebar__section-title">Simulation Mode</span>
@@ -2736,7 +2827,7 @@ function AppInner() {
                     : 'Live 모드로 전환'
                 }
               >
-                Live Simulation
+                Live
               </button>
               <button
                 type="button"
@@ -2762,7 +2853,11 @@ function AppInner() {
                     setVoyageHudVisible(true);
                     if (!voyage.trace) {
                       try {
-                        await voyage.loadIceClass('Arc4');
+                        // 현재 선택된 빙하 아카이브 월에 맞춰 진입 (기본 Arc4)
+                        await voyage.loadTraceFor(
+                          'Arc4',
+                          archiveKeyToMonth(state.cachedIceKey),
+                        );
                       } catch (e) {
                         // 로드 실패는 콘솔에 이미 로깅됨
                       }
@@ -2777,17 +2872,18 @@ function AppInner() {
                     : 'Voyage 모드로 전환'
                 }
               >
-                Voyage Playback
+                Voyage
               </button>
             </div>
           </section>
 
           {/* ── 2a. Voyage 모드: 재생 컨트롤 ── */}
           {voyageActive && (
-            <section className="dt-sidebar__section">
+            <section className="dt-sidebar__section dt-sidebar__section--mode">
               <span className="dt-sidebar__section-title">재생 컨트롤</span>
               <VoyageControls
                 iceClass={voyage.iceClass}
+                month={voyage.month}
                 onLoadIceClass={voyage.loadIceClass}
                 trace={voyage.trace}
                 tHours={voyage.tHours}
@@ -2803,7 +2899,7 @@ function AppInner() {
 
           {/* ── 2b. Live 모드: 자동 항해 컨트롤 ── */}
           {!voyageActive && (
-            <section className="dt-sidebar__section">
+            <section className="dt-sidebar__section dt-sidebar__section--mode">
               <span className="dt-sidebar__section-title">자동 항해</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {/* 현재 선택된 항로 표시 */}
@@ -2922,7 +3018,7 @@ function AppInner() {
                     ? '⚑ 수동 조종 중 — 자동 항해 비활성'
                     : state.isSimulating
                       ? `진행률 ${(state.simProgress * 100).toFixed(1)}%`
-                      : '항로는 좌측 사이드바 Routes 에서 변경 가능'}
+                      : '항로는 좌측 Routes에서 변경'}
                 </div>
               </div>
             </section>
@@ -2942,8 +3038,10 @@ function AppInner() {
               }
             />
           </section>
+          </div>{/* /.dt-sidebar__scroll */}
 
-          <section className="dt-sidebar__section">
+          {/* 현재 위치 미니맵 — 스크롤 제외, 하단 고정 */}
+          <section className="dt-sidebar__section dt-sidebar__section--pinned">
             <Minimap
               shipPos={state.shipState}
               progress={state.simProgress}
