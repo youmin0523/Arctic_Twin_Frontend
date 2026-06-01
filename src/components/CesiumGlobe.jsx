@@ -12,7 +12,10 @@ import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { ROUTES } from '../data/arcticRoutes';
 
+// Cesium ion 토큰 (브라우저 노출용 클라이언트 토큰). Vercel 환경변수
+// VITE_CESIUM_ION_TOKEN 이 있으면 그것을 쓰고, 없으면 기본 토큰으로 폴백.
 Cesium.Ion.defaultAccessToken =
+  import.meta.env.VITE_CESIUM_ION_TOKEN ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3MTJlMTZiNS02MzQ1LTRmZGMtOWM0Ni1kZWJkMzQxZTJhMTEiLCJpZCI6NDA2NTU5LCJpYXQiOjE3NzM5OTY1Mjl9.lpSbE0Dchaf-IEx0J8MkS6FoisyRwd4nfSZ0GyFciLI';
 
 const ROUTE_COLORS = {

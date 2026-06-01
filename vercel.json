@@ -1,12 +1,16 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://REPLACE-WITH-AWS-BACKEND-DOMAIN/api/:path*"
-    },
-    {
-      "source": "/health",
-      "destination": "https://REPLACE-WITH-AWS-BACKEND-DOMAIN/health"
-    }
+    { "source": "/api/:path*", "destination": "https://api.arctictwin.com/api/:path*" },
+    { "source": "/health", "destination": "https://api.arctictwin.com/api/health" },
+    { "source": "/data/:path*", "destination": "https://api.arctictwin.com/data/:path*" },
+    { "source": "/proxy/:path*", "destination": "https://api.arctictwin.com/proxy/:path*" },
+    { "source": "/scripts/:path*", "destination": "https://api.arctictwin.com/scripts/:path*" },
+    { "source": "/nsidc-proxy/:path*", "destination": "https://api.arctictwin.com/nsidc-proxy/:path*" },
+    { "source": "/cop-proxy/:path*", "destination": "https://api.arctictwin.com/cop-proxy/:path*" },
+    { "source": "/sentinel-proxy/:path*", "destination": "https://api.arctictwin.com/sentinel-proxy/:path*" }
   ]
 }

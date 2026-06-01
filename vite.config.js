@@ -2,14 +2,16 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import cesium from 'vite-plugin-cesium';
 
-// AI 백엔드 라우팅 (서비스별 개별 설정 가능)
-// - 기본값은 HF Space 배포본. 로컬에서 띄우면 해당 상수만 'http://localhost:<port>' 로 바꾸면 됨.
-// - SAR 은 HF 에 모델이 없어서 기본값을 로컬(8005) 로 둠.
-const HF_BACKEND = 'https://heejin-oh-arctic-digital-twin-backend.hf.space';
-const RL_BACKEND     = HF_BACKEND;                  // 또는 'http://localhost:8001'
-const REPORT_BACKEND = 'http://localhost:8002';     // 폰트 fix는 로컬에만 있음 (HF 미반영). HF로 돌리려면 HF_BACKEND
-const FUEL_BACKEND   = HF_BACKEND;                  // 또는 'http://localhost:8003'
-const SAR_BACKEND    = 'http://localhost:8005';     // 또는 HF_BACKEND
+// AI 백엔드 라우팅 (dev 프록시 전용)
+// - 프로덕션(Vercel)은 vite 가 아니라 vercel.json 의 rewrites 가 AWS 백엔드로 넘긴다.
+// - 로컬 개발: Node 게이트웨이(8000)가 /api/rl→8001·/api/report→8002·/api/fuel→8003 을
+//   내부 프록시하므로 아래 타깃을 localhost 로 두면 Node 가 자동 라우팅한다.
+// - SAR 만 Node 가 프록시하지 않아 dev 에서 직접 8005 로 지정.
+//   (원격 AWS 백엔드로 dev 를 붙이려면 각 상수를 'https://<AWS-호스트>' 로 바꾸면 됨.)
+const RL_BACKEND     = 'http://localhost:8001';
+const REPORT_BACKEND = 'http://localhost:8002';
+const FUEL_BACKEND   = 'http://localhost:8003';
+const SAR_BACKEND    = 'http://localhost:8005';
 
 const mkProxy = (target) => ({
   target,
@@ -22,10 +24,6 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/ai-api': {
-        ...mkProxy(RL_BACKEND),
-        rewrite: (path) => path.replace(/^\/ai-api/, '/api'),
-      },
       '/api/rl':     mkProxy(RL_BACKEND),
       '/api/report': mkProxy(REPORT_BACKEND),
       '/api/fuel':   mkProxy(FUEL_BACKEND),
