@@ -1,28 +1,16 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
-    {
-      "source": "/api/rl/:path*",
-      "destination": "https://heejin-oh-arctic-digital-twin-backend.hf.space/api/rl/:path*"
-    },
-    {
-      "source": "/api/report/:path*",
-      "destination": "https://heejin-oh-arctic-digital-twin-backend.hf.space/api/report/:path*"
-    },
-    {
-      "source": "/api/fuel/:path*",
-      "destination": "https://heejin-oh-arctic-digital-twin-backend.hf.space/api/fuel/:path*"
-    },
-    {
-      "source": "/api/sar/:path*",
-      "destination": "https://heejin-oh-arctic-digital-twin-backend.hf.space/api/sar/:path*"
-    },
-    {
-      "source": "/api/ml/:path*",
-      "destination": "https://heejin-oh-arctic-digital-twin-backend.hf.space/api/fuel/:path*"
-    },
-    {
-      "source": "/health",
-      "destination": "https://heejin-oh-arctic-digital-twin-backend.hf.space/health"
-    }
+    { "source": "/api/:path*", "destination": "https://api.arctictwin.com/api/:path*" },
+    { "source": "/health", "destination": "https://api.arctictwin.com/api/health" },
+    { "source": "/data/:path*", "destination": "https://api.arctictwin.com/data/:path*" },
+    { "source": "/proxy/:path*", "destination": "https://api.arctictwin.com/proxy/:path*" },
+    { "source": "/scripts/:path*", "destination": "https://api.arctictwin.com/scripts/:path*" },
+    { "source": "/nsidc-proxy/:path*", "destination": "https://api.arctictwin.com/nsidc-proxy/:path*" },
+    { "source": "/cop-proxy/:path*", "destination": "https://api.arctictwin.com/cop-proxy/:path*" },
+    { "source": "/sentinel-proxy/:path*", "destination": "https://api.arctictwin.com/sentinel-proxy/:path*" }
   ]
 }

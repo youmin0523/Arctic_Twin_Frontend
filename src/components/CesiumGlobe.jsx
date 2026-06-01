@@ -12,7 +12,10 @@ import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { ROUTES } from '../data/arcticRoutes';
 
+// Cesium ion 토큰 (브라우저 노출용 클라이언트 토큰). Vercel 환경변수
+// VITE_CESIUM_ION_TOKEN 이 있으면 그것을 쓰고, 없으면 기본 토큰으로 폴백.
 Cesium.Ion.defaultAccessToken =
+  import.meta.env.VITE_CESIUM_ION_TOKEN ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3MTJlMTZiNS02MzQ1LTRmZGMtOWM0Ni1kZWJkMzQxZTJhMTEiLCJpZCI6NDA2NTU5LCJpYXQiOjE3NzM5OTY1Mjl9.lpSbE0Dchaf-IEx0J8MkS6FoisyRwd4nfSZ0GyFciLI';
 
 const ROUTE_COLORS = {
@@ -264,6 +267,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
     routeVisibility,
     generatedRoutes,
     rlShips = [],   // [{ id, route, shipType, lat, lon, heading, label, iteration }]
+    avoidanceActive = false,  // RL 회피 경로 적용/계산 중 — 본 항로를 청록색으로 강조
   },
   ref,
 ) {
@@ -282,6 +286,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
       overrideWaypoints,
       visibilityStates,
       generatedRoutesObj,
+      avoiding = false,
     ) => {
       if (!viewer || viewer.isDestroyed()) return;
 
@@ -300,7 +305,9 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
           visibilityStates && visibilityStates[key] !== undefined
             ? visibilityStates[key]
             : isMain;
-        const cssColor = ROUTE_COLORS[key] || '#60a5fa';
+        // RL 회피 적용 중이면 본 항로를 청록색으로 강조
+        const cssColor =
+          isMain && avoiding ? '#22d3ee' : ROUTE_COLORS[key] || '#60a5fa';
         const entities = [];
 
         const line = viewer.entities.add({
@@ -309,11 +316,11 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
             positions: Cesium.Cartesian3.fromDegreesArray(
               pathWps.flatMap((w) => [w.lon, w.lat]),
             ),
-            width: isMain ? 4.0 : 2.5,
+            width: isMain ? (avoiding ? 5.5 : 4.0) : 2.5,
             arcType: Cesium.ArcType.GEODESIC,
             material: isMain
               ? new Cesium.PolylineGlowMaterialProperty({
-                  glowPower: 0.4,
+                  glowPower: avoiding ? 0.6 : 0.4,
                   color:
                     Cesium.Color.fromCssColorString(cssColor).withAlpha(0.9),
                 })
@@ -805,6 +812,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
         activeWaypoints,
         routeVisibility,
         generatedRoutes,
+        avoidanceActive,
       );
     }
   }, [
@@ -812,6 +820,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
     activeWaypoints,
     routeVisibility,
     generatedRoutes,
+    avoidanceActive,
     drawRoute,
   ]);
 

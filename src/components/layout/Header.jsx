@@ -3,7 +3,6 @@ import './Header.css';
 
 const NAV_ITEMS = [
   { id: 'whatif',         label: 'WHAT-IF SCENARIO',  short: 'WHAT-IF' },
-  { id: 'sar',            label: 'SAR ICEBERG DETECTION', short: 'SAR' },
   { id: 'trend_report',   label: 'TREND REPORT',      short: 'TREND' },
   { id: 'fuel',           label: 'FUEL ANALYSIS',     short: 'FUEL' },
 ];

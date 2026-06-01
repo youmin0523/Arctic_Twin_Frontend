@@ -1,5 +1,14 @@
 import React, { createContext, useContext, useReducer } from 'react';
 
+// 항로별 사용자 편집본(웨이포인트)을 localStorage 에서 로드 — 새로고침에도 유지
+function loadEditedRoutes() {
+  try {
+    return JSON.parse(localStorage.getItem('dt_editedRoutes') || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
 // ── Initial State ────────────────────────────────────────────────────────────
 // Mirrors every global variable from arctic-hybrid.html lines 2599-2760
 
@@ -10,8 +19,11 @@ const initialState = {
   isSimulating: false,
   multiplier: 1000,
 
-  // Route
+  // Route (활성 항로 — ▶ 마커·본선이 따라가는 실제 항해 항로)
   currentRouteKey: 'NSR',
+
+  // Ship Design Info "목표 항로" — 연료/평가 비교 전용. 활성 항로(currentRouteKey)와 분리.
+  designRouteKey: 'NSR',
 
   // Ports (dynamic departure/arrival)
   departurePort: 'BUSAN',
@@ -20,6 +32,15 @@ const initialState = {
   // Dynamic waypoints (null = use default ROUTES[key])
   generatedWaypoints: null,
   isRerouting: false,
+
+  // 항로별 사용자 편집본 { routeKey: [{lon,lat,label}] } — 서버 영속(공유) + localStorage 캐시
+  editedRoutes: loadEditedRoutes(),
+
+  // RL 회피 강조 상태 (active=계산/적용 중, type='iceberg'|'land', method='RL'|'A*')
+  avoidance: { active: false, type: null, method: null },
+
+  // 빙하/육지 근접 경고 (level='none'|'warning'|'critical')
+  proximityAlert: { level: 'none', type: null, distM: Infinity, message: '' },
 
   // Camera
   currentMode: 'SATELLITE',
@@ -40,7 +61,7 @@ const initialState = {
     length: 225,
     width: 32,
     gm: 3.8,
-    draft: 14.5,
+    draft: 12.5, // NSR 수심 제한(NSR_MAX_DRAFT=12.5m)에 맞춘 기본값 — 기본 선박이 북극항로를 통과할 수 있도록
     iceClass: 'Arc4',
   },
 
@@ -108,6 +129,9 @@ function reducer(state, action) {
     case 'SET_ROUTE':
       return { ...state, currentRouteKey: action.payload };
 
+    case 'SET_DESIGN_ROUTE':
+      return { ...state, designRouteKey: action.payload };
+
     case 'SET_DEPARTURE_PORT':
       return { ...state, departurePort: action.payload };
 
@@ -127,6 +151,40 @@ function reducer(state, action) {
 
     case 'SET_REROUTING':
       return { ...state, isRerouting: action.payload };
+
+    case 'SET_ALL_EDITED_ROUTES':
+      return { ...state, editedRoutes: action.payload || {} };
+
+    case 'SET_EDITED_ROUTE':
+      return {
+        ...state,
+        editedRoutes: {
+          ...state.editedRoutes,
+          [action.payload.key]: action.payload.waypoints,
+        },
+      };
+
+    case 'CLEAR_EDITED_ROUTE': {
+      const next = { ...state.editedRoutes };
+      delete next[action.payload];
+      return { ...state, editedRoutes: next };
+    }
+
+    case 'CLEAR_ALL_EDITED_ROUTES':
+      return { ...state, editedRoutes: {} };
+
+    case 'SET_AVOIDANCE':
+      return { ...state, avoidance: action.payload };
+
+    case 'SET_PROXIMITY_ALERT':
+      // 동일 레벨/타입이면 객체 재생성 방지 (불필요한 리렌더 억제)
+      if (
+        state.proximityAlert.level === action.payload.level &&
+        state.proximityAlert.type === action.payload.type
+      ) {
+        return state;
+      }
+      return { ...state, proximityAlert: action.payload };
 
     case 'SET_MODE':
       return {
@@ -195,6 +253,7 @@ function reducer(state, action) {
         departurePort: state.departurePort,
         arrivalPort: state.arrivalPort,
         currentRouteKey: state.currentRouteKey,
+        designRouteKey: state.designRouteKey,
       };
 
     default:

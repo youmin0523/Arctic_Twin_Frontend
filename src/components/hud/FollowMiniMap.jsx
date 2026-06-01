@@ -27,6 +27,14 @@ function latLonToXY(lat, lon, w, h) {
   };
 }
 
+const DEG_TO_KM = 111.32;
+function approxDistKm(lat1, lon1, lat2, lon2) {
+  const dLat = (lat2 - lat1) * DEG_TO_KM;
+  const dLon =
+    (lon2 - lon1) * DEG_TO_KM * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+  return Math.sqrt(dLat * dLat + dLon * dLon);
+}
+
 export default function FollowMiniMap({
   visible,
   shipPos,
@@ -35,6 +43,9 @@ export default function FollowMiniMap({
   departurePort,
   arrivalPort,
   araonPos,
+  icebergs,        // [{ lat, lon, length_m }] 실측 빙하
+  avoiding,        // RL 회피 적용/진행 중 여부
+  avoidanceType,   // 'iceberg' | 'land'
 }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
@@ -60,6 +71,9 @@ export default function FollowMiniMap({
     shipPos?.lon,
     heading,
     waypoints,
+    icebergs,
+    avoiding,
+    avoidanceType,
     araonPos?.lat,
     araonPos?.lon,
     araonPos?.status,
@@ -97,7 +111,7 @@ export default function FollowMiniMap({
       ctx.stroke();
     }
 
-    // 항로 라인
+    // 항로 라인 (RL 회피 적용 시 청록색으로 강조)
     const wps = waypoints || [];
     if (wps.length > 1) {
       ctx.beginPath();
@@ -111,11 +125,39 @@ export default function FollowMiniMap({
           ctx.lineTo(p.x, p.y);
         }
       }
-      ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth = 1.5;
-      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = avoiding ? '#22d3ee' : '#f59e0b';
+      ctx.lineWidth = avoiding ? 2 : 1.5;
+      ctx.globalAlpha = avoiding ? 0.95 : 0.7;
+      if (avoiding) {
+        ctx.shadowBlur = 6;
+        ctx.shadowColor = '#22d3ee';
+      }
       ctx.stroke();
+      ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
+    }
+
+    // 빙하 장애물 (실측) — 본선 50km 이내는 빨강, 그 외는 청백색
+    const bergs = icebergs || [];
+    const sLat = shipPos?.lat ?? 35.1;
+    const sLon = shipPos?.lon ?? 129.0;
+    if (bergs.length > 0) {
+      for (const b of bergs) {
+        if (typeof b.lat !== 'number') continue;
+        const bp = latLonToXY(b.lat, b.lon, W, H);
+        const near = approxDistKm(sLat, sLon, b.lat, b.lon) < 50;
+        ctx.beginPath();
+        ctx.arc(bp.x, bp.y, near ? 2.2 : 1.3, 0, Math.PI * 2);
+        ctx.fillStyle = near ? '#ef4444' : 'rgba(200,240,255,0.75)';
+        ctx.fill();
+        if (near) {
+          ctx.beginPath();
+          ctx.arc(bp.x, bp.y, 4, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(239,68,68,0.5)';
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+      }
     }
 
     // 출발항
@@ -182,6 +224,18 @@ export default function FollowMiniMap({
       ctx.strokeStyle = '#ef4444';
       ctx.lineWidth = 1.5;
       ctx.stroke();
+    }
+
+    // RL 회피 중 배지 (좌상단)
+    if (avoiding) {
+      const label = `⚠ RL ${avoidanceType === 'land' ? '육지' : '빙하'} 회피`;
+      ctx.font = 'bold 8px sans-serif';
+      ctx.textAlign = 'left';
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(8,51,68,0.85)';
+      ctx.fillRect(4, 4, tw + 10, 13);
+      ctx.fillStyle = '#22d3ee';
+      ctx.fillText(label, 9, 13);
     }
 
     // 좌표 텍스트 (우하단)

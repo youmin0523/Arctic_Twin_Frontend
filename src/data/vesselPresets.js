@@ -11,7 +11,7 @@ export const SHIP_PRESETS = {
     width: 32,
     gm: 3.8,
     iceClass: 'Arc4',
-    draft: 14.5,
+    draft: 12.5, // NSR 수심 제한(NSR_MAX_DRAFT=12.5m)에 맞춘 기본값
   },
   lng: { type: 'lng', disp: 95000, len: 295, width: 46, gm: 5.1, iceClass: 'PC4', draft: 12.0 },
   container: {

@@ -91,6 +91,13 @@ export async function generateRoute(
   icebergs = [],
   maxSafeConcentration = 0.7
 ) {
+  // 0. ETC(기타) — 출발항↔도착항을 잇는 직선(대권) 경로.
+  //    정의된 회랑 데이터가 없으므로 항상 두 항구를 직접 연결한다.
+  //    (기본 부산→로테르담 조합 포함 — ROUTES 폴백으로 NSR 이 되던 버그 수정)
+  if (routeType === 'ETC') {
+    return buildDirectRoute(depPort, arrPort);
+  }
+
   const baseRoute = ROUTES[routeType] || ROUTES.NSR;
   const corridor  = ROUTE_CORRIDOR[routeType] || ROUTE_CORRIDOR.NSR;
   const n = baseRoute.length;
@@ -112,10 +119,9 @@ export async function generateRoute(
     return reversed;
   }
 
-  // 2.5. 동일 지역 항구 (아시아↔아시아, 유럽↔유럽) 또는 직항(ETC) 경로
-  // //! [Original Code] 직항 단순 연결 (육지 관통 버그 수정 전)
-  // //* [Modified Code] INTRA_REGION_ROUTES 참조 우회 및 ETC 직항 모드 지원
-  if (routeType === 'ETC' || isSameRegion(depPort.id, arrPort.id)) {
+  // 2.5. 동일 지역 항구 (아시아↔아시아, 유럽↔유럽) 경로
+  //      (ETC 는 상단 0단계에서 이미 처리됨)
+  if (isSameRegion(depPort.id, arrPort.id)) {
     const routeKey = `${depPort.id}-${arrPort.id}`;
     const reverseKey = `${arrPort.id}-${depPort.id}`;
     
@@ -251,4 +257,56 @@ function extractArcticSegment(waypoints) {
  */
 export function reverseRoute(waypoints) {
   return waypoints.slice().reverse().map((wp) => ({ ...wp }));
+}
+
+/**
+ * 두 항구를 잇는 직선(대권) 경로 생성 — ETC(기타) 항로용.
+ * 구면 선형보간(slerp)으로 segments+1 개의 웨이포인트를 샘플링하여
+ * Cesium GEODESIC 호 및 시뮬레이션(routePos) 모두에서 자연스럽게 동작한다.
+ */
+export function buildDirectRoute(depPort, arrPort, segments = 24) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+
+  const lat1 = toRad(depPort.lat);
+  const lon1 = toRad(depPort.lon);
+  const lat2 = toRad(arrPort.lat);
+  const lon2 = toRad(arrPort.lon);
+
+  // 두 지점 사이의 각거리(중심각)
+  const d =
+    2 *
+    Math.asin(
+      Math.sqrt(
+        Math.sin((lat2 - lat1) / 2) ** 2 +
+          Math.cos(lat1) * Math.cos(lat2) * Math.sin((lon2 - lon1) / 2) ** 2,
+      ),
+    );
+
+  // 동일 지점이면 2점만 반환 (0 나눗셈 방지)
+  if (!isFinite(d) || d === 0) {
+    return [
+      { lon: depPort.lon, lat: depPort.lat, label: depPort.name },
+      { lon: arrPort.lon, lat: arrPort.lat, label: arrPort.name },
+    ];
+  }
+
+  const wps = [];
+  for (let i = 0; i <= segments; i++) {
+    const f = i / segments;
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(lat1) * Math.cos(lon1) + B * Math.cos(lat2) * Math.cos(lon2);
+    const y = A * Math.cos(lat1) * Math.sin(lon1) + B * Math.cos(lat2) * Math.sin(lon2);
+    const z = A * Math.sin(lat1) + B * Math.sin(lat2);
+    const lat = Math.atan2(z, Math.sqrt(x * x + y * y));
+    const lon = Math.atan2(y, x);
+    wps.push({
+      lon: toDeg(lon),
+      lat: toDeg(lat),
+      label:
+        i === 0 ? depPort.name : i === segments ? arrPort.name : undefined,
+    });
+  }
+  return wps;
 }

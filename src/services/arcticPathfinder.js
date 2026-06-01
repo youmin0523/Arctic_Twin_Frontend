@@ -25,6 +25,47 @@ export async function initLandMask() {
   }
 }
 
+/** 육지 마스크가 로드되었는지 여부 */
+export function isLandMaskReady() {
+  return landMask !== null;
+}
+
+/**
+ * 주어진 좌표가 육지 셀인지 판정.
+ * 육지 마스크가 없거나 북극권(위도 65°) 밖이면 false.
+ */
+export function isLandAt(lat, lon) {
+  if (!landMask) return false;
+  if (lat < GRID_LAT_MIN || lat >= GRID_LAT_MAX) return false;
+  const [col, row] = lonLatToCell(lon, lat);
+  return landMask[row * GRID_COLS + col] === 1;
+}
+
+/**
+ * 선박 진행 방향(heading) 전방으로 육지가 있는지 스캔.
+ *
+ * @param {number} lat - 현재 위도
+ * @param {number} lon - 현재 경도
+ * @param {number} heading - 진행 방향(도, 북=0 시계방향)
+ * @param {number} lookAheadKm - 전방 탐색 거리(km)
+ * @param {number} stepKm - 스캔 간격(km)
+ * @returns {{ blocked: boolean, distanceKm: number }} 가장 가까운 육지까지 거리
+ */
+export function landAhead(lat, lon, heading, lookAheadKm = 80, stepKm = 8) {
+  if (!landMask) return { blocked: false, distanceKm: Infinity };
+  const hdg = ((heading || 0) * Math.PI) / 180;
+  const KM_PER_DEG = 111.32;
+  const cosLat = Math.cos((lat * Math.PI) / 180) || 1e-3;
+  for (let d = stepKm; d <= lookAheadKm; d += stepKm) {
+    const cLat = lat + (Math.cos(hdg) * d) / KM_PER_DEG;
+    const cLon = lon + (Math.sin(hdg) * d) / (KM_PER_DEG * cosLat);
+    if (isLandAt(cLat, cLon)) {
+      return { blocked: true, distanceKm: d };
+    }
+  }
+  return { blocked: false, distanceKm: Infinity };
+}
+
 // ─── 격자 상수 ────────────────────────────────────────────────────────────────
 
 const GRID_LON_STEP = 0.5;
