@@ -12,6 +12,12 @@ import { checkRouteAhead, rerouteAroundIceberg } from './icebergAvoidance';
 import { mergeDetourSmooth, rlPositionsToWaypoints } from './smoothPathGenerator';
 import { buildTimings, routePos } from './shipSimulator';
 import { landAhead, initLandMask, isLandMaskReady } from './arcticPathfinder';
+import {
+  landAheadGlobal,
+  findWaterDetour,
+  isGlobalLandMaskReady,
+  initGlobalLandMask,
+} from './landMaskGlobal';
 
 const POLL_INTERVAL_MS = 2000;     // 2초마다 확인
 const DETECTION_RADIUS_KM = 50;    // 50km 이내 빙산 감지
@@ -124,10 +130,10 @@ export function createRLAvoidanceController(options) {
       bergDangerIdx = res.dangerIdx;
     }
 
-    // ── 2) 육지 위협 판정 (학습된 RL 모델의 육지 회피 발동 조건) ──
-    const land = landAhead(
-      ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 8,
-    );
+    // ── 2) 육지 위협 판정 — 전역 마스크 우선(전 위도), 미로드 시 북극 마스크 ──
+    const land = isGlobalLandMaskReady()
+      ? landAheadGlobal(ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 6)
+      : landAhead(ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 8);
 
     // 빙산도 육지도 위협 없으면 종료
     if (!bergBlocked && !land.blocked) return;
@@ -154,6 +160,44 @@ export function createRLAvoidanceController(options) {
         5000,
       );
 
+      let newWaypoints = null;
+      let newProgress = progress;
+
+      // 육지 위협 + 전역 마스크 → 전역 A* 해상 우회 (RL은 빙산 전용이라 육지엔 부적합)
+      if (threatType === 'land' && isGlobalLandMaskReady()) {
+        const margin = 3;
+        const insertStart = Math.max(0, currentSeg);
+        const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
+        const sWp = wps[insertStart];
+        const eWp = wps[insertEnd];
+        const detour = findWaterDetour(
+          { lon: sWp.lon, lat: sWp.lat },
+          { lon: eWp.lon, lat: eWp.lat },
+        );
+        if (detour && detour.length > 0) {
+          method = 'GlobalA*';
+          const detourWps = detour.map((p) => ({ lon: p.lon, lat: p.lat, label: '육지 회피' }));
+          // 스무딩 없이 스플라이스 — 스플라인이 육지로 휘어 무교차 보장이 깨지는 것 방지.
+          const spliced = [
+            ...wps.slice(0, insertStart + 1),
+            ...detourWps,
+            ...wps.slice(insertEnd),
+          ];
+          // 진행도 재매핑(선박 위치 점프 방지)
+          const oldTimings = buildTimings(wps);
+          const newTimings = buildTimings(spliced);
+          const curPos = routePos(progress, oldTimings, wps);
+          let bestT = progress, bestD = Infinity;
+          for (const tp of newTimings) {
+            const d = approxDistKm(curPos.lat, curPos.lon, tp.lat, tp.lon);
+            if (d < bestD) { bestD = d; bestT = tp.t; }
+          }
+          newWaypoints = spliced;
+          newProgress = bestT;
+        }
+      }
+
+      if (!newWaypoints) {
       const iceData = getIceData();
       const weather = getWeather() || { visibility_km: 10, wave_height_m: 1 };
       const iceClass = getIceClass() || 'PC5';
@@ -177,9 +221,6 @@ export function createRLAvoidanceController(options) {
         { concentration: iceData?.concentration || 0 },
         weather,
       );
-
-      let newWaypoints = null;
-      let newProgress = progress;
 
       if (
         !rlResult.fallback &&
@@ -241,6 +282,7 @@ export function createRLAvoidanceController(options) {
           }
         }
       }
+      } // end if(!newWaypoints) — 빙산 RL/A* 경로
 
       // 병합 결과 정합성 검사 — 특이점 폭주 경로면 적용하지 않음(현재 경로 유지)
       if (newWaypoints && !isWaypointListSane(newWaypoints)) {
@@ -284,6 +326,9 @@ export function createRLAvoidanceController(options) {
       // 육지 회피용 마스크 로드 보장 (이미 로드됐으면 즉시 반환)
       if (!isLandMaskReady()) {
         initLandMask().catch(() => {});
+      }
+      if (!isGlobalLandMaskReady()) {
+        initGlobalLandMask().catch(() => {});
       }
       intervalId = setInterval(tick, POLL_INTERVAL_MS);
       console.log('[RL Controller] 시작 (2초 간격, 빙산+육지 회피)');
