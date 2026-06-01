@@ -11,9 +11,11 @@ import { rlInfer } from './rlInferenceClient';
 import { checkRouteAhead, rerouteAroundIceberg } from './icebergAvoidance';
 import { mergeDetourSmooth, rlPositionsToWaypoints } from './smoothPathGenerator';
 import { buildTimings, routePos } from './shipSimulator';
+import { landAhead, initLandMask, isLandMaskReady } from './arcticPathfinder';
 
 const POLL_INTERVAL_MS = 2000;     // 2초마다 확인
 const DETECTION_RADIUS_KM = 50;    // 50km 이내 빙산 감지
+const LAND_LOOKAHEAD_KM = 90;      // 전방 90km 육지 감지
 const MIN_RL_CONFIDENCE = 0.3;     // RL 최소 신뢰도 (미만 시 A* 폴백)
 const DEG_TO_KM = 111.32;
 
@@ -21,6 +23,42 @@ function approxDistKm(lat1, lon1, lat2, lon2) {
   const dLat = (lat2 - lat1) * DEG_TO_KM;
   const dLon = (lon2 - lon1) * DEG_TO_KM * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
   return Math.sqrt(dLat * dLat + dLon * dLon);
+}
+
+/**
+ * RL 예측 경로 정합성 검사.
+ * 극점/날짜변경선 특이점에서 경로가 폭주(수천 km)하는 것을 막는 안전 가드 —
+ * 비정상이면 false 를 반환해 A* 폴백을 쓰도록 한다.
+ */
+function isProjectedPathSane(path, ship) {
+  if (!Array.isArray(path) || path.length === 0) return false;
+  const MAX_DIST_KM = 400; // 투영은 ~70km 규모 — 400km 초과 점프는 좌표 특이점 아티팩트
+  for (const p of path) {
+    if (!p || !Number.isFinite(p.lon) || !Number.isFinite(p.lat)) return false;
+    if (p.lat < -90 || p.lat > 90 || p.lon < -180 || p.lon > 180) return false;
+    if (approxDistKm(ship.lat, ship.lon, p.lat, p.lon) > MAX_DIST_KM) return false;
+  }
+  return true;
+}
+
+/**
+ * 최종 우회 웨이포인트 정합성 검사.
+ * 병합/스무딩 단계에서 경도 특이점으로 경로가 폭주하는 경우를 잡는다 —
+ * 연속 웨이포인트 간 점프가 비정상적으로 크면(>500km) 적용을 거부.
+ */
+function isWaypointListSane(wps) {
+  if (!Array.isArray(wps) || wps.length < 2) return false;
+  const MAX_SEGMENT_KM = 500;
+  for (let i = 0; i < wps.length; i++) {
+    const w = wps[i];
+    if (!w || !Number.isFinite(w.lon) || !Number.isFinite(w.lat)) return false;
+    if (w.lat < -90 || w.lat > 90 || w.lon < -180 || w.lon > 180) return false;
+    if (i > 0) {
+      const d = approxDistKm(wps[i - 1].lat, wps[i - 1].lon, w.lat, w.lon);
+      if (d > MAX_SEGMENT_KM) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -63,34 +101,58 @@ export function createRLAvoidanceController(options) {
     if (now - lastRerouteTime < REROUTE_COOLDOWN_MS) return;
 
     const ship = getShipState();
-    const icebergs = getIcebergs();
-    if (!ship || !icebergs || icebergs.length === 0) return;
+    if (!ship) return;
+    const icebergs = getIcebergs() || [];
 
+    const wps = getActiveWps();
+    if (!wps || wps.length < 2) return;
+    const progress = getProgress();
+    const currentSeg = Math.floor(progress * (wps.length - 1));
+
+    // ── 1) 빙산 위협 판정 ──────────────────────────────────────
     // 전방 50km 이내 빙산 필터링
     const nearbyBergs = icebergs.filter((berg) => {
       const dist = approxDistKm(ship.lat, ship.lon, berg.lat, berg.lon);
       return dist < DETECTION_RADIUS_KM;
     });
 
-    if (nearbyBergs.length === 0) return;
+    let bergBlocked = false;
+    let bergDangerIdx = -1;
+    if (nearbyBergs.length > 0) {
+      const res = checkRouteAhead(wps, currentSeg, nearbyBergs, 10, 15);
+      bergBlocked = res.blocked;
+      bergDangerIdx = res.dangerIdx;
+    }
 
-    // 기존 경로에서 위험 구간 확인
-    const wps = getActiveWps();
-    const progress = getProgress();
-    const currentSeg = Math.floor(progress * (wps.length - 1));
-
-    const { blocked, dangerIdx } = checkRouteAhead(
-      wps, currentSeg, nearbyBergs, 10, 15,
+    // ── 2) 육지 위협 판정 (학습된 RL 모델의 육지 회피 발동 조건) ──
+    const land = landAhead(
+      ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 8,
     );
 
-    if (!blocked) return;
+    // 빙산도 육지도 위협 없으면 종료
+    if (!bergBlocked && !land.blocked) return;
 
-    // 위험 감지 — 회피 경로 계산 시작
+    // 회피 사유 결정 (둘 다면 더 임박한 쪽 우선 — 육지는 충돌 시 치명적)
+    const threatType = land.blocked && (!bergBlocked || land.distanceKm < 30)
+      ? 'land'
+      : 'iceberg';
+    const dangerIdx = bergBlocked
+      ? bergDangerIdx
+      : Math.min(currentSeg + 3, wps.length - 1);
+
+    // 위협 감지 — 회피 경로 계산 시작
     isProcessing = true;
+    let method = 'unknown'; // finally 에서도 참조하므로 try 밖에 선언
 
     try {
       dispatch({ type: 'SET_REROUTING', payload: true });
-      showToast('🧊 빙산 감지! RL 우회 경로 계산 중...', 5000);
+      dispatch({ type: 'SET_AVOIDANCE', payload: { active: true, type: threatType, method: null } });
+      showToast(
+        threatType === 'land'
+          ? `🏔️ 전방 육지 감지(${Math.round(land.distanceKm)}km)! RL 회피 경로 계산 중...`
+          : '🧊 빙산 감지! RL 우회 경로 계산 중...',
+        5000,
+      );
 
       const iceData = getIceData();
       const weather = getWeather() || { visibility_km: 10, wave_height_m: 1 };
@@ -118,9 +180,13 @@ export function createRLAvoidanceController(options) {
 
       let newWaypoints = null;
       let newProgress = progress;
-      let method = 'unknown';
 
-      if (!rlResult.fallback && rlResult.confidence >= MIN_RL_CONFIDENCE && rlResult.projected_path?.length > 0) {
+      if (
+        !rlResult.fallback &&
+        rlResult.confidence >= MIN_RL_CONFIDENCE &&
+        rlResult.projected_path?.length > 0 &&
+        isProjectedPathSane(rlResult.projected_path, ship)
+      ) {
         // RL 성공 — 예측 경로를 웨이포인트로 변환
         method = 'RL';
         const margin = 5;
@@ -176,6 +242,12 @@ export function createRLAvoidanceController(options) {
         }
       }
 
+      // 병합 결과 정합성 검사 — 특이점 폭주 경로면 적용하지 않음(현재 경로 유지)
+      if (newWaypoints && !isWaypointListSane(newWaypoints)) {
+        console.warn('[RL Controller] 비정상 우회 경로 감지 — 적용 거부(현재 경로 유지)');
+        newWaypoints = null;
+      }
+
       if (newWaypoints) {
         dispatch({
           type: 'SET_GENERATED_WAYPOINTS_WITH_PROGRESS',
@@ -186,8 +258,12 @@ export function createRLAvoidanceController(options) {
           },
         });
         lastRerouteTime = Date.now();
-        showToast(`빙산 우회 경로 적용 완료 (${method})`, 3000);
-        console.log(`[RL Controller] ${method} 우회 경로 적용: ${newWaypoints.length}개 웨이포인트`);
+        dispatch({ type: 'SET_AVOIDANCE', payload: { active: true, type: threatType, method } });
+        showToast(
+          `${threatType === 'land' ? '육지' : '빙산'} 회피 경로 적용 완료 (${method})`,
+          3000,
+        );
+        console.log(`[RL Controller] ${threatType}/${method} 회피 경로 적용: ${newWaypoints.length}개 웨이포인트`);
       } else {
         showToast('우회 경로 탐색 실패 — 현재 경로 유지', 3000);
       }
@@ -197,14 +273,20 @@ export function createRLAvoidanceController(options) {
     } finally {
       isProcessing = false;
       dispatch({ type: 'SET_REROUTING', payload: false });
+      // 계산 종료 — 활성 강조는 잠시 유지했다가 해제 (적용된 경로는 그대로 남음)
+      dispatch({ type: 'SET_AVOIDANCE', payload: { active: false, type: threatType, method } });
     }
   }
 
   return {
     start() {
       if (intervalId) return;
+      // 육지 회피용 마스크 로드 보장 (이미 로드됐으면 즉시 반환)
+      if (!isLandMaskReady()) {
+        initLandMask().catch(() => {});
+      }
       intervalId = setInterval(tick, POLL_INTERVAL_MS);
-      console.log('[RL Controller] 시작 (2초 간격)');
+      console.log('[RL Controller] 시작 (2초 간격, 빙산+육지 회피)');
     },
 
     stop() {

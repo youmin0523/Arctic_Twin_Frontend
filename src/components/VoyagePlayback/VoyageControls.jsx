@@ -3,6 +3,7 @@ import { PLAYBACK_SPEEDS } from '../../hooks/useVoyagePlayback';
 
 export default function VoyageControls({
   iceClass,
+  month,
   onLoadIceClass,
   trace,
   tHours,
@@ -19,6 +20,14 @@ export default function VoyageControls({
       <div className="voyage-controls-row">
         <div className="voyage-controls-group">
           <span className="voyage-controls-label">Class</span>
+          {month != null && (
+            <span
+              className="voyage-month-badge"
+              title="빙하 아카이브에서 선택한 월 (Live=현재 월). 항해 데이터가 이 월에 맞춰 로드됩니다."
+            >
+              {month}월
+            </span>
+          )}
           {['Arc4', 'Arc7', 'Arc9'].map((cls) => (
             <button
               type="button"

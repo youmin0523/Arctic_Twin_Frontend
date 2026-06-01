@@ -14,9 +14,10 @@
  *   }
  */
 
-export async function loadTrace(iceClass) {
+export async function loadTrace(iceClass, month = 3) {
   const cls = iceClass.toLowerCase();
-  const url = `/simulations/nsr_month03_${cls}.json`;
+  const mm = String(month).padStart(2, '0');
+  const url = `/simulations/nsr_month${mm}_${cls}.json`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`[VoyageTrace] fetch failed: ${url} (${res.status})`);

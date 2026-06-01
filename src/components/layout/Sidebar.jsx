@@ -140,21 +140,22 @@ export default function Sidebar({
             <div
               key={r.key}
               className={`dt-sidebar__route-item${isActive ? ' dt-sidebar__route-item--active' : ''}`}
+              onClick={() => onRouteChange && onRouteChange(r.key)}
+              title="이 항로를 활성 항로로 설정"
+              style={{ cursor: onRouteChange ? 'pointer' : 'default' }}
             >
               <input
                 type="checkbox"
                 className="dt-sidebar__checkbox"
                 checked={routeVisibility[r.key] || false}
                 onChange={e => onRouteVisibilityChange(r.key, e.target.checked)}
+                onClick={e => e.stopPropagation()}
                 title="항로 표시 토글"
               />
               <span className="dt-sidebar__route-bar" style={{ background: r.color }} />
               <span
                 className="dt-sidebar__route-label"
-                onClick={() => onRouteChange && onRouteChange(r.key)}
-                title="이 항로를 활성 항로로 설정"
                 style={{
-                  cursor: onRouteChange ? 'pointer' : 'default',
                   color: isActive ? '#22d3ee' : undefined,
                   fontWeight: isActive ? 700 : undefined,
                 }}

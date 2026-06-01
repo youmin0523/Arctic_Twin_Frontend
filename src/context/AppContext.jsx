@@ -21,6 +21,12 @@ const initialState = {
   generatedWaypoints: null,
   isRerouting: false,
 
+  // RL 회피 강조 상태 (active=계산/적용 중, type='iceberg'|'land', method='RL'|'A*')
+  avoidance: { active: false, type: null, method: null },
+
+  // 빙하/육지 근접 경고 (level='none'|'warning'|'critical')
+  proximityAlert: { level: 'none', type: null, distM: Infinity, message: '' },
+
   // Camera
   currentMode: 'SATELLITE',
   prevMode: 'SATELLITE',
@@ -40,7 +46,7 @@ const initialState = {
     length: 225,
     width: 32,
     gm: 3.8,
-    draft: 14.5,
+    draft: 12.5, // NSR 수심 제한(NSR_MAX_DRAFT=12.5m)에 맞춘 기본값 — 기본 선박이 북극항로를 통과할 수 있도록
     iceClass: 'Arc4',
   },
 
@@ -127,6 +133,19 @@ function reducer(state, action) {
 
     case 'SET_REROUTING':
       return { ...state, isRerouting: action.payload };
+
+    case 'SET_AVOIDANCE':
+      return { ...state, avoidance: action.payload };
+
+    case 'SET_PROXIMITY_ALERT':
+      // 동일 레벨/타입이면 객체 재생성 방지 (불필요한 리렌더 억제)
+      if (
+        state.proximityAlert.level === action.payload.level &&
+        state.proximityAlert.type === action.payload.type
+      ) {
+        return state;
+      }
+      return { ...state, proximityAlert: action.payload };
 
     case 'SET_MODE':
       return {

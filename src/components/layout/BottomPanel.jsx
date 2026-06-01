@@ -379,6 +379,14 @@ function DesignInfoPanel({
             />{' '}
             극지 항해사
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={checks.sanctioned}
+              onChange={() => toggleCheck('sanctioned')}
+            />{' '}
+            ⚠ 제재국가 선적
+          </label>
         </div>
       </div>
       <div className="bp-divider" />

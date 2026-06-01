@@ -267,6 +267,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
     routeVisibility,
     generatedRoutes,
     rlShips = [],   // [{ id, route, shipType, lat, lon, heading, label, iteration }]
+    avoidanceActive = false,  // RL 회피 경로 적용/계산 중 — 본 항로를 청록색으로 강조
   },
   ref,
 ) {
@@ -285,6 +286,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
       overrideWaypoints,
       visibilityStates,
       generatedRoutesObj,
+      avoiding = false,
     ) => {
       if (!viewer || viewer.isDestroyed()) return;
 
@@ -303,7 +305,9 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
           visibilityStates && visibilityStates[key] !== undefined
             ? visibilityStates[key]
             : isMain;
-        const cssColor = ROUTE_COLORS[key] || '#60a5fa';
+        // RL 회피 적용 중이면 본 항로를 청록색으로 강조
+        const cssColor =
+          isMain && avoiding ? '#22d3ee' : ROUTE_COLORS[key] || '#60a5fa';
         const entities = [];
 
         const line = viewer.entities.add({
@@ -312,11 +316,11 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
             positions: Cesium.Cartesian3.fromDegreesArray(
               pathWps.flatMap((w) => [w.lon, w.lat]),
             ),
-            width: isMain ? 4.0 : 2.5,
+            width: isMain ? (avoiding ? 5.5 : 4.0) : 2.5,
             arcType: Cesium.ArcType.GEODESIC,
             material: isMain
               ? new Cesium.PolylineGlowMaterialProperty({
-                  glowPower: 0.4,
+                  glowPower: avoiding ? 0.6 : 0.4,
                   color:
                     Cesium.Color.fromCssColorString(cssColor).withAlpha(0.9),
                 })
@@ -808,6 +812,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
         activeWaypoints,
         routeVisibility,
         generatedRoutes,
+        avoidanceActive,
       );
     }
   }, [
@@ -815,6 +820,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
     activeWaypoints,
     routeVisibility,
     generatedRoutes,
+    avoidanceActive,
     drawRoute,
   ]);
 

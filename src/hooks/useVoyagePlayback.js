@@ -25,6 +25,7 @@ export default function useVoyagePlayback() {
   const [speed, setSpeed] = useState(60);
   const [newEvents, setNewEvents] = useState([]);
   const [iceClass, setIceClass] = useState(null);
+  const [month, setMonth] = useState(3);
 
   // rAF 내부 상태 (리렌더 유발 없음)
   const rafRef = useRef(null);
@@ -35,6 +36,8 @@ export default function useVoyagePlayback() {
   const speedRef = useRef(60);
   const playingRef = useRef(false);
   const arrivedLoggedRef = useRef(false);
+  const iceClassRef = useRef(null);
+  const monthRef = useRef(3);
 
   // state → ref 동기화
   useEffect(() => {
@@ -116,13 +119,17 @@ export default function useVoyagePlayback() {
     arrivedLoggedRef.current = false;
   }, []);
 
-  const loadIceClass = useCallback(
-    async (cls) => {
+  // 내부 코어: 클래스+월 조합으로 trace 로드 후 재생 상태 초기화
+  const loadTraceFor = useCallback(
+    async (cls, m) => {
       pause();
-      const tr = await loadTrace(cls);
+      const tr = await loadTrace(cls, m);
       traceRef.current = tr;
       setTrace(tr);
+      iceClassRef.current = cls;
       setIceClass(cls);
+      monthRef.current = m;
+      setMonth(m);
       tHoursRef.current = 0;
       prevFiredTRef.current = 0;
       setTHours(0);
@@ -130,6 +137,18 @@ export default function useVoyagePlayback() {
       arrivedLoggedRef.current = false;
     },
     [pause],
+  );
+
+  // 클래스만 변경 (현재 월 유지)
+  const loadIceClass = useCallback(
+    (cls) => loadTraceFor(cls, monthRef.current),
+    [loadTraceFor],
+  );
+
+  // 월만 변경 (현재 클래스 유지, 미선택 시 Arc4 기본)
+  const setVoyageMonth = useCallback(
+    (m) => loadTraceFor(iceClassRef.current || 'Arc4', m),
+    [loadTraceFor],
   );
 
   const changeSpeed = useCallback((s) => {
@@ -148,11 +167,14 @@ export default function useVoyagePlayback() {
   return {
     trace,
     iceClass,
+    month,
     tHours,
     isPlaying,
     speed,
     newEvents,
     loadIceClass,
+    loadTraceFor,
+    setVoyageMonth,
     play,
     pause,
     seek,
