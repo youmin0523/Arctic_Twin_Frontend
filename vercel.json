@@ -5,6 +5,9 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://api.arctictwin.com/api/:path*" },
+    { "source": "/api-docs.json", "destination": "https://api.arctictwin.com/api-docs.json" },
+    { "source": "/api-docs", "destination": "https://api.arctictwin.com/api-docs" },
+    { "source": "/api-docs/:path*", "destination": "https://api.arctictwin.com/api-docs/:path*" },
     { "source": "/health", "destination": "https://api.arctictwin.com/api/health" },
     { "source": "/data/:path*", "destination": "https://api.arctictwin.com/data/:path*" },
     { "source": "/proxy/:path*", "destination": "https://api.arctictwin.com/proxy/:path*" },
