@@ -2378,6 +2378,12 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
             const inst = Math.sqrt(dxp * dxp + dzp * dzp) / motionDt;
             ctx.current.seaFlowSpeed =
               (ctx.current.seaFlowSpeed || 0) * 0.85 + inst * 0.15;
+            // //* [Modified Code] 실제 이동 벡터(EMA) — heading 을 "가는 방향"에서 직접 유도해
+            //   crab(옆으로 미끄러짐) 을 원천 차단하기 위함. 정지 시엔 갱신 안 함(노이즈 방지).
+            const vx = dxp / motionDt;
+            const vz = dzp / motionDt;
+            ctx.current.velX = (ctx.current.velX || 0) * 0.8 + vx * 0.2;
+            ctx.current.velZ = (ctx.current.velZ || 0) * 0.8 + vz * 0.2;
           }
           ctx.current.flowLastPos = { x: sp.x, z: sp.z };
         }
@@ -2418,13 +2424,24 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
           }
         }
 
-        // 배 heading 부드러운 보간 (FOLLOW/자동 모드에서만 — 수동 모드는 App.jsx에서 직접 설정)
+        // 배 heading 보간 (FOLLOW/자동 모드 — 수동 모드는 App.jsx에서 직접 설정)
+        // //* [Modified Code] 뱃머리가 "실제 가는 방향"을 바라보도록:
+        //   충분히 이동 중이면 이동 벡터(velX,velZ)에서 target heading 을 유도(crab 차단),
+        //   거의 정지면 props(shipState.heading) 로 폴백. 보간 속도도 0.03→0.08 로 올려 lag 감소.
         if (shipGroup3 && shipState && !manualMode) {
-          const headingRad = (-(shipState.heading || 0) * Math.PI) / 180;
+          const c = ctx.current;
+          const speed = Math.hypot(c.velX || 0, c.velZ || 0);
+          let headingRad;
+          if (speed > 0.8) {
+            // bow = (-sin ry, -cos ry) 를 이동 벡터에 맞춤 → ry = atan2(-vx, -vz)
+            headingRad = Math.atan2(-(c.velX || 0), -(c.velZ || 0));
+          } else {
+            headingRad = (-(shipState.heading || 0) * Math.PI) / 180;
+          }
           let diff = headingRad - shipGroup3.rotation.y;
           while (diff < -Math.PI) diff += Math.PI * 2;
           while (diff > Math.PI) diff -= Math.PI * 2;
-          shipGroup3.rotation.y += diff * 0.03;
+          shipGroup3.rotation.y += diff * 0.08;
         }
 
         // ── 아라온 위치/rotation 매 프레임 갱신 (모드별 타겟 계산 + 전환 lerp) ──
@@ -2576,6 +2593,14 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
           const shipPos = shipGroup3.position;
           const ry = shipGroup3.rotation.y; // 선박 회전각
           const orbit = orbitRef.current;
+
+          // //* [Modified Code] 드래그 중이 아니면 yaw 를 천천히 0(정선미)으로 복귀
+          //   → 카메라가 항상 진행방향 뒤에 정렬되어, 전진이 화면 안쪽으로 들어오고
+          //   배가 옆으로 미끄러져 보이지 않는다. (드래그로 둘러보기는 그대로 가능)
+          if (!orbit.dragging) {
+            orbit.yaw *= 0.96;
+            if (Math.abs(orbit.yaw) < 0.002) orbit.yaw = 0;
+          }
 
           // 선미 기준 월드 각도 + 오빗 yaw 오프셋
           // //* [Modified Code] Math.PI/2 오프셋을 제거하고 선박의 -Z(Front) 기준 일치하도록 삼각함수 위상(Math.sin/cos) 교정

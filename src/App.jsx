@@ -999,9 +999,11 @@ function AppInner() {
               ((pos.lon - depPort.lon) * mPerDegLon) / 1.5;
             three.shipPivot.position.z =
               (-(pos.lat - depPort.lat) * METERS_PER_DEGREE_LAT) / 1.5;
-            // 선박 회전: route heading 에 맞춤 — 카메라(heading 기준 후방 배치)와 정렬
-            // (rotation.y = -heading; 수동 조종 블록과 동일 규약)
-            three.shipPivot.rotation.y = -hdg;
+            // //! [Original Code] route heading 직접 설정 — 위치 이동방향과 미세 불일치 시
+            //   배가 옆으로 미끄러져(crab) 보였음.
+            //   three.shipPivot.rotation.y = -hdg;
+            // //* [Modified Code] rotation 은 ThreeOverlay 렌더 루프가 "실제 이동 벡터"에서
+            //   유도(velocity-heading)하도록 위임 → 뱃머리가 항상 진행방향을 향함.
             // 선박 흔들림 (roll/pitch/heave)
             if (three.updateShipMotion) three.updateShipMotion(dt, pos.lat);
           }
