@@ -223,6 +223,7 @@ export default function VoyageInfoPanel({
 
   return (
     <div
+      className="dt-float-panel"
       style={{
         position: 'absolute',
         top: 70,

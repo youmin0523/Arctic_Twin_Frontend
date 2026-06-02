@@ -327,6 +327,15 @@ function AppInner() {
   // 텔레포트 오버레이 상태
   const [teleportOpen, setTeleportOpen] = useState(false);
 
+  // ── 반응형 드로어 (태블릿/모바일): 좌 사이드바·우 사이드바·하단 패널 ──
+  // 데스크톱에서는 CSS 미디어쿼리가 비활성이라 이 상태는 시각적 영향이 없다.
+  // 'left' | 'right' | 'bottom' | null — 한 번에 하나만 열림.
+  const [openDrawer, setOpenDrawer] = useState(null);
+  const toggleDrawer = useCallback((id) => {
+    setOpenDrawer((prev) => (prev === id ? null : id));
+  }, []);
+  const closeDrawers = useCallback(() => setOpenDrawer(null), []);
+
   // 상단바 메뉴에서 제어하는 활성 패널
   // 'rl_curriculum' | 'trend_learning' | 'whatif' | 'sar' | 'trend_report' | 'fuel' | null
   const [activePanel, setActivePanel] = useState(null);
@@ -2667,9 +2676,48 @@ function AppInner() {
   // isArcticRoute=false 면 araonDisplayPos=null → AraonLiveMarker 가 entity 미생성/제거
 
   return (
-    <div className="dt-app">
+    <div
+      className={
+        'dt-app' +
+        (openDrawer === 'left' ? ' nav-left-open' : '') +
+        (openDrawer === 'right' ? ' nav-right-open' : '') +
+        (openDrawer === 'bottom' ? ' nav-bottom-open' : '') +
+        (openDrawer ? ' nav-any-open' : '')
+      }
+    >
       {/* ═══ Header ═══ */}
       <Header activePanel={activePanel} onSelectPanel={handleSelectPanel} />
+
+      {/* ═══ 반응형 드로어 토글 FAB (태블릿/모바일 전용 — CSS로 표시 제어) ═══ */}
+      <button
+        type="button"
+        className={'dt-fab dt-fab--left' + (openDrawer === 'left' ? ' dt-fab--active' : '')}
+        onClick={() => toggleDrawer('left')}
+        aria-label="레이어 · 항로 패널"
+        title="레이어 · 항로"
+      >
+        ☰
+      </button>
+      <button
+        type="button"
+        className={'dt-fab dt-fab--right' + (openDrawer === 'right' ? ' dt-fab--active' : '')}
+        onClick={() => toggleDrawer('right')}
+        aria-label="시뮬레이션 컨트롤 패널"
+        title="시뮬레이션 컨트롤"
+      >
+        ⚙
+      </button>
+      <button
+        type="button"
+        className={'dt-fab dt-fab--bottom' + (openDrawer === 'bottom' ? ' dt-fab--active' : '')}
+        onClick={() => toggleDrawer('bottom')}
+        aria-label="선박 제원 · 서비스 정보 패널"
+        title="제원 · 서비스 정보"
+      >
+        📊
+      </button>
+      {/* 드로어 백드롭 (탭하면 닫힘) */}
+      <div className="dt-drawer-backdrop" onClick={closeDrawers} />
 
       {/* ═══ Main Area (Sidebar + Viewport) ═══ */}
       <div className="dt-main">
@@ -2848,6 +2896,7 @@ function AppInner() {
             }}
           />
           <button
+            className="dt-edit-toggle"
             onClick={() => setEditMode((v) => !v)}
             style={{
               position: 'absolute', top: 12, right: 12, zIndex: 201,

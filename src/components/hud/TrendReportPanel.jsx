@@ -104,7 +104,7 @@ export default function TrendReportPanel({ open, onToggle }) {
         backdropFilter: 'blur(2px)',
       }}
     />
-    <div style={{
+    <div className="dt-float-panel dt-float-panel--center" style={{
       position: 'fixed',
       top: '50%',
       left: '50%',

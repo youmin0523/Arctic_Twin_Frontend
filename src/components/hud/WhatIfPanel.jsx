@@ -219,7 +219,7 @@ export default function WhatIfPanel({ route = 'NSR', iceClass = 'PC5' }) {
     : null;
 
   return (
-    <div style={{
+    <div className="dt-float-panel" style={{
       position: 'absolute',
       left: 690, top: 5, width: 320, zIndex: 290,
       background: 'rgba(13, 19, 41, 0.92)',
