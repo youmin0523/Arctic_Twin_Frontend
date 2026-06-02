@@ -18,6 +18,7 @@ import TeleportOverlay from './components/hud/TeleportOverlay';
 import Minimap from './components/hud/Minimap';
 import WeatherHud from './components/hud/WeatherHud';
 import RLProgressOverlay from './components/hud/RLProgressOverlay';
+import AvoidanceMetricsHUD from './components/hud/AvoidanceMetricsHUD';
 import TrendReportProgressOverlay from './components/hud/TrendReportProgressOverlay';
 import TrendReportPanel from './components/hud/TrendReportPanel';
 import WhatIfPanel from './components/hud/WhatIfPanel';
@@ -49,6 +50,7 @@ import {
   routePos,
   routeHeading,
   calculateRouteDistanceKM,
+  estimateVoyageDays,
   getSeaState,
 } from './services/shipSimulator';
 
@@ -68,7 +70,10 @@ import {
 } from './services/icebergAvoidance';
 import { createRLAvoidanceController } from './services/rlAvoidanceController';
 import { landAhead, initLandMask } from './services/arcticPathfinder';
+import { landAheadGlobal, isGlobalLandMaskReady, initGlobalLandMask } from './services/landMaskGlobal';
+import { fetchEditedRoutes, saveEditedRoutes } from './services/editedRoutesApi';
 import ProximityWarningOverlay from './components/hud/ProximityWarningOverlay';
+import WaypointEditor from './components/WaypointEditor';
 import useVoyagePlayback from './hooks/useVoyagePlayback';
 import VoyagePlaybackLayer from './components/VoyagePlayback/VoyagePlaybackLayer';
 import VoyageHUD from './components/VoyagePlayback/VoyageHUD';
@@ -87,12 +92,17 @@ import {
 } from './services/derivedMetrics';
 import './components/VoyagePlayback/voyagePlayback.css';
 
-// 빙하 아카이브 선택 key('live' | '2023-MM') → Voyage 트레이스 월(1~12).
-// 'live' 는 현재 달력 월에 매핑 (빙하 오버레이와 동일 월 정렬).
+// 빙하 아카이브 선택 key → Voyage 트레이스 월(1~12).
+// 백엔드(/api/ice/archives)가 내려주는 두 가지 형식 모두 지원:
+//   · 월별 레퍼런스: "month-06"   → 6
+//   · 날짜별 아카이브: "2026-05-26" → 5
+// 'live' / 빈 값은 현재 달력 월에 매핑 (빙하 오버레이와 동일 월 정렬).
 function archiveKeyToMonth(key) {
   if (!key || key === 'live') return new Date().getMonth() + 1;
-  const m = /^\d{4}-(\d{2})$/.exec(key);
-  return m ? parseInt(m[1], 10) : 3;
+  const monthly = /^month-(\d{2})$/.exec(key);
+  if (monthly) return parseInt(monthly[1], 10);
+  const dated = /^\d{4}-(\d{2})/.exec(key); // "YYYY-MM" 또는 "YYYY-MM-DD"
+  return dated ? parseInt(dated[1], 10) : 3;
 }
 
 function AppInner() {
@@ -104,6 +114,8 @@ function AppInner() {
   const deckRef = useRef(null);
   const viewerRef = useRef(null);
   const [cesiumViewerState, setCesiumViewerState] = useState(null);
+  // 웨이포인트 편집 모드 (단계 C)
+  const [editMode, setEditMode] = useState(false);
 
   // Voyage Playback 모드 (쇄빙선 에스코트 시뮬 재생)
   const [appMode, setAppMode] = useState('live'); // 'live' | 'voyage'
@@ -502,8 +514,8 @@ function AppInner() {
       const distKm = calculateRouteDistanceKM(activeWaypoints);
       // //! [Original Code] 하드코딩된 총 초 수
       //      const totalSec = getTotalSeconds(state.currentRouteKey);
-      // //* [Modified Code] 실측 거리 기반 동적 초 산출 (15노트 기준)
-      const dynamicDays = Math.max(1, Math.round(distKm / (15 * 1.852 * 24)));
+      // //* [Modified Code] 실측 거리 기반 동적 초 산출 (검증된 순수 함수로 통합)
+      const dynamicDays = estimateVoyageDays(activeWaypoints);
       const totalSec = dynamicDays * 86400;
       // 선박 물리 속도는 시뮬 배율과 무관 (배율은 시간 압축일 뿐)
       const speedKmH = distKm / (totalSec / 3600);
@@ -554,7 +566,9 @@ function AppInner() {
       pMsg = `거리 ${Math.round(nearestIce)}m`;
     }
     // 육지 (전방 스캔, km 단위) — 빙하보다 임박할 때만 승격
-    const landP = landAhead(lat, lon, state.shipState.heading || 0, 120, 10);
+    const landP = isGlobalLandMaskReady()
+      ? landAheadGlobal(lat, lon, state.shipState.heading || 0, 120, 8)
+      : landAhead(lat, lon, state.shipState.heading || 0, 120, 10);
     if (landP.blocked) {
       if (landP.distanceKm < 12 && pLevel !== 'critical') {
         pType = 'land'; pLevel = 'critical'; pDist = landP.distanceKm * 1000;
@@ -646,9 +660,24 @@ function AppInner() {
   // ── 타임드 웨이포인트 (항로/항구 변경 시 재계산) ─────────────────
   const activeWaypoints = useMemo(() => {
     return (
-      state.generatedWaypoints || ROUTES[state.currentRouteKey] || ROUTES.NSR
+      state.generatedWaypoints ||
+      state.editedRoutes[state.currentRouteKey] ||
+      ROUTES[state.currentRouteKey] ||
+      ROUTES.NSR
     );
-  }, [state.currentRouteKey, state.generatedWaypoints]);
+  }, [state.currentRouteKey, state.generatedWaypoints, state.editedRoutes]);
+
+  // Ship Design Info "목표 항로"의 웨이포인트 — 적합성 평가(빙하 샘플링·거리) 전용.
+  // 활성 항로와 분리. ETC 는 ROUTES 데이터가 없어 출발항→도착항 직선을 사용.
+  const designWaypoints = useMemo(() => {
+    if (state.designRouteKey === 'ETC') {
+      return [
+        PORTS[state.departurePort] || PORTS.BUSAN,
+        PORTS[state.arrivalPort] || PORTS.ROTTERDAM,
+      ];
+    }
+    return ROUTES[state.designRouteKey] || ROUTES.NSR;
+  }, [state.designRouteKey, state.departurePort, state.arrivalPort]);
 
   const timedWaypoints = useMemo(() => {
     return buildTimings(activeWaypoints);
@@ -713,7 +742,30 @@ function AppInner() {
   // ── 육지 마스크 사전 로드 (육지 회피/경고용) ──────────────────
   useEffect(() => {
     initLandMask().catch(() => {});
+    initGlobalLandMask().catch(() => {});
   }, []);
+
+  // ── 편집 항로: 서버에서 로드(공유) ──────────────────────────
+  useEffect(() => {
+    fetchEditedRoutes().then((data) => {
+      if (data && typeof data === 'object') {
+        dispatch({ type: 'SET_ALL_EDITED_ROUTES', payload: data });
+      }
+    });
+  }, []);
+
+  // ── 편집 항로: 변경 시 서버 저장(공유) — 최초 로드 직후 불필요 저장 방지 ──
+  const editedRoutesLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!editedRoutesLoadedRef.current) {
+      editedRoutesLoadedRef.current = true;
+      return;
+    }
+    const t = setTimeout(() => {
+      saveEditedRoutes(state.editedRoutes);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [state.editedRoutes]);
 
   // RL 회피 강조 활성 여부 (계산 중이거나 회피 상태일 때)
   const avoidanceActive =
@@ -772,8 +824,7 @@ function AppInner() {
         //        const routeTotalSec = getTotalSeconds(routeKey);
         // //* [Modified Code] 동적 시간 계산
         const wps = activeWpRef.current;
-        const distKm = calculateRouteDistanceKM(wps);
-        const dynamicDays = Math.max(1, Math.round(distKm / (15 * 1.852 * 24)));
+        const dynamicDays = estimateVoyageDays(wps);
         const routeTotalSec = dynamicDays * 86400;
         const progress = Math.min(simElapsedRef.current / routeTotalSec, 1);
 
@@ -1592,11 +1643,11 @@ function AppInner() {
     ],
   );
 
-  // 항로 변경 (BottomPanel 드롭다운, AI 재라우팅 등) — 진행도/본선위치 유지
-  const handleRouteChange = useCallback(
+  // Ship Design Info "목표 항로" 변경 — 연료/평가 비교용 값만 바꾼다.
+  // 활성 항로(currentRouteKey)·▶ 마커·본선 위치는 건드리지 않음 (Sidebar Routes 와 분리).
+  const handleDesignRouteChange = useCallback(
     (routeKey) => {
-      dispatch({ type: 'SET_ROUTE', payload: routeKey });
-      dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
+      dispatch({ type: 'SET_DESIGN_ROUTE', payload: routeKey });
     },
     [dispatch],
   );
@@ -1678,7 +1729,7 @@ function AppInner() {
   const handleApplySpecs = useCallback(
     (polarParams) => {
       const autoColdRoute =
-        weatherData?.routes?.[state.currentRouteKey]?.route_summary
+        weatherData?.routes?.[state.designRouteKey]?.route_summary
           ?.is_temp_below_minus_10 ??
         weatherData?.route_summary?.is_temp_below_minus_10 ??
         false;
@@ -1688,7 +1739,7 @@ function AppInner() {
       });
       setShowSpecsModal(true);
     },
-    [weatherData, state.currentRouteKey],
+    [weatherData, state.designRouteKey],
   );
 
   // FOV
@@ -2262,7 +2313,8 @@ function AppInner() {
       };
 
       // 항로 전체 구간 샘플링 — 최악 구간(최고 농도) 기준으로 평가
-      const currentWps = activeWaypoints;
+      // 평가 대상은 Ship Design Info "목표 항로"(designRouteKey). 활성 항로와 분리.
+      const currentWps = designWaypoints;
       let worstLat = state.shipState.lat;
       let worstLon = state.shipState.lon;
       let worstConc = 0;
@@ -2300,19 +2352,19 @@ function AppInner() {
         shipType: formData.shipType || 'General',
         waveHeight:
           formData.waveHeight ??
-          weatherData?.routes?.[state.currentRouteKey]?.route_summary
+          weatherData?.routes?.[state.designRouteKey]?.route_summary
             ?.max_wave_height_m ??
           weatherData?.route_summary?.max_wave_height_m ??
           0.0,
         visibilityKm:
           formData.visibilityKm ??
-          weatherData?.routes?.[state.currentRouteKey]?.route_summary
+          weatherData?.routes?.[state.designRouteKey]?.route_summary
             ?.min_visibility_km ??
           weatherData?.route_summary?.min_visibility_km ??
           10.0,
         isTempBelowMinus10:
           formData.isColdRoute ??
-          weatherData?.routes?.[state.currentRouteKey]?.route_summary
+          weatherData?.routes?.[state.designRouteKey]?.route_summary
             ?.is_temp_below_minus_10 ??
           weatherData?.route_summary?.is_temp_below_minus_10 ??
           false,
@@ -2350,7 +2402,8 @@ function AppInner() {
     [
       state.shipState,
       state.shipSpecs,
-      state.currentRouteKey,
+      state.designRouteKey,
+      designWaypoints,
       weatherData,
       showToast,
     ],
@@ -2377,12 +2430,12 @@ function AppInner() {
       isColdRoute: checks.coldRoute,
     });
 
-    // 항로 변경 필요 여부 확인
+    // 항로 변경 필요 여부 확인 — 평가 대상인 "목표 항로"(designRouteKey) 기준
     const suggestedRoute = STATUS_TO_REROUTE[evalResult?.status];
-    if (suggestedRoute && suggestedRoute !== state.currentRouteKey) {
+    if (suggestedRoute && suggestedRoute !== state.designRouteKey) {
       const stepMatch = evalResult.reason.match(/\[Step (\w+)\]/);
       setRouteAlert({
-        fromRoute: state.currentRouteKey,
+        fromRoute: state.designRouteKey,
         toRoute: suggestedRoute,
         stepTag: stepMatch ? stepMatch[1] : null,
         reason: evalResult.reason,
@@ -2395,7 +2448,7 @@ function AppInner() {
   }, [
     pendingPolarParams,
     handleEvaluate,
-    state.currentRouteKey,
+    state.designRouteKey,
     state.shipSpecs,
     showToast,
   ]);
@@ -2748,6 +2801,48 @@ function AppInner() {
             avoidance={state.avoidance}
           />
 
+          {/* AI 자율 회피 런타임 지표 (RL 성공률/폴백률/평균신뢰도) */}
+          <div style={{ position: 'absolute', left: 12, bottom: 90, zIndex: 280, pointerEvents: 'none' }}>
+            <AvoidanceMetricsHUD
+              getMetrics={() => rlControllerRef.current?.getMetrics()}
+              active={state.isSimulating && !state.manualMode}
+            />
+          </div>
+
+          {/* 웨이포인트 에디터 (단계 C) — 글로브 위 직접 편집 + 패널 */}
+          <WaypointEditor
+            viewer={cesiumViewerState}
+            enabled={editMode}
+            waypoints={activeWaypoints}
+            currentRouteKey={state.currentRouteKey}
+            isEdited={!!state.editedRoutes[state.currentRouteKey]}
+            onChange={(wps) => {
+              dispatch({ type: 'SET_EDITED_ROUTE', payload: { key: state.currentRouteKey, waypoints: wps } });
+              if (state.generatedWaypoints) dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
+            }}
+            onResetRoute={() => {
+              dispatch({ type: 'CLEAR_EDITED_ROUTE', payload: state.currentRouteKey });
+              if (state.generatedWaypoints) dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
+            }}
+            onClearAll={() => {
+              dispatch({ type: 'CLEAR_ALL_EDITED_ROUTES' });
+              if (state.generatedWaypoints) dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
+            }}
+          />
+          <button
+            onClick={() => setEditMode((v) => !v)}
+            style={{
+              position: 'absolute', top: 12, right: 12, zIndex: 201,
+              padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+              fontFamily: 'sans-serif', fontWeight: 700, fontSize: 13,
+              color: editMode ? '#0b1020' : '#cffafe',
+              background: editMode ? '#22d3ee' : 'rgba(8,51,68,0.85)',
+              border: '1.5px solid rgba(34,211,238,0.7)',
+            }}
+          >
+            {editMode ? '✓ 항로 편집 중' : '✏ 항로 편집'}
+          </button>
+
           {/* VoyageInfoPanel — Voyage/Live 이중 모드, 사용자가 X로 닫을 수 있음 */}
           {infoPanelVisible && (
             <VoyageInfoPanel
@@ -3066,8 +3161,8 @@ function AppInner() {
         onRecenter={handleRecenter}
         evaluationResult={evaluationResult}
         onEvaluate={handleEvaluate}
-        currentRoute={state.currentRouteKey}
-        onRouteChange={handleRouteChange}
+        currentRoute={state.designRouteKey}
+        onRouteChange={handleDesignRouteChange}
         onReset={handleResetEvaluation}
         araon={araonInfo}
       />
@@ -3077,7 +3172,7 @@ function AppInner() {
         open={showSpecsModal}
         specs={state.shipSpecs}
         polarParams={pendingPolarParams}
-        currentRoute={state.currentRouteKey}
+        currentRoute={state.designRouteKey}
         onConfirm={handleModalConfirm}
         onClose={handleModalClose}
       />
@@ -3092,7 +3187,11 @@ function AppInner() {
         onClose={() => setRouteAlert(null)}
         onConfirm={() => {
           if (routeAlert?.toRoute) {
-            handleRouteChange(routeAlert.toRoute);
+            // 우회 권고 수락 = 실제 활성 항로(▶·본선)를 우회 항로로 변경.
+            // 목표 항로도 함께 동기화해 평가 패널이 새 항로 기준으로 재평가되게 함.
+            dispatch({ type: 'SET_ROUTE', payload: routeAlert.toRoute });
+            dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
+            handleDesignRouteChange(routeAlert.toRoute);
             setRouteAlert(null);
           }
         }}

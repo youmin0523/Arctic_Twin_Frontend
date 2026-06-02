@@ -1,4 +1,10 @@
 import React, { useState, useRef, useCallback } from 'react';
+import {
+  isHypothetical,
+  countRecommendations as countRec,
+  buildScenarioComparison,
+  assessConfidence,
+} from '../../services/decisionSupport';
 
 const RECOMMENDATION_STYLE = {
   '추천':   { color: '#34d399', border: '#22c55e', icon: '✓' },
@@ -7,21 +13,43 @@ const RECOMMENDATION_STYLE = {
   '기준':   { color: '#93c5fd', border: '#3b82f6', icon: '◆' },
 };
 
-// 가설 시나리오 식별: name 또는 label에 [HYP] / 【가설】 prefix가 있거나 is_hypothetical 플래그
-function isHypothetical(sc) {
-  if (sc?.is_hypothetical === true) return true;
-  const t = (sc?.name || sc?.label || '');
-  return t.includes('[HYP]') || t.includes('【가설】');
-}
+const CONFIDENCE_STYLE = {
+  high:   { fg: '#34d399', bd: 'rgba(52,211,153,0.4)',  bg: 'rgba(52,211,153,0.10)' },
+  medium: { fg: '#fbbf24', bd: 'rgba(245,158,11,0.4)',  bg: 'rgba(245,158,11,0.10)' },
+  low:    { fg: '#f87171', bd: 'rgba(239,68,68,0.4)',   bg: 'rgba(239,68,68,0.10)' },
+};
 
-// 추천 분포 카운트
-function countRec(scenarios) {
-  const out = { '추천': 0, '조건부': 0, '비추천': 0 };
-  for (const s of scenarios) {
-    const r = s.recommendation;
-    if (r in out) out[r] += 1;
-  }
-  return out;
+// 정량 비교 테이블 — 추천등급/평균RIO/안전운항비율 기준 상위 시나리오를 한눈에 비교
+function ComparisonTable({ scenarios }) {
+  const rows = buildScenarioComparison(scenarios).slice(0, 5);
+  if (rows.length < 2) return null;
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 4 }}>정량 비교 (상위 {rows.length})</div>
+      <table style={{ width: '100%', fontSize: 10, color: '#cbd5e1', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ color: '#6b89b0' }}>
+            <td>#</td><td>시나리오</td><td align="right">RIO</td>
+            <td align="right">안전일%</td><td align="center">판정</td>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const st = RECOMMENDATION_STYLE[r.recommendation] || RECOMMENDATION_STYLE['기준'];
+            return (
+              <tr key={r.rank} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                <td>{r.rank}</td>
+                <td style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
+                <td align="right">{r.avgRio ?? '—'}</td>
+                <td align="right">{r.greenRatio != null ? Math.round(r.greenRatio * 100) : '—'}</td>
+                <td align="center" style={{ color: st.color }}>{st.icon}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // 도넛 차트 (SVG, 의존성 없음)
@@ -185,6 +213,11 @@ export default function WhatIfPanel({ route = 'NSR', iceClass = 'PC5' }) {
   );
   const statusInfo = status ? STATUS_BADGE[status] : null;
 
+  // 의사결정 신뢰도 (수렴 휴리스틱 단일화 — decisionSupport.assessConfidence)
+  const confidence = scenarios.length > 0
+    ? assessConfidence(scenarios, result?.convergence_status)
+    : null;
+
   return (
     <div style={{
       position: 'absolute',
@@ -272,6 +305,23 @@ export default function WhatIfPanel({ route = 'NSR', iceClass = 'PC5' }) {
               {statusInfo.label}
             </div>
           )}
+
+          {/* 의사결정 신뢰도 배지 (근거 동반) */}
+          {confidence && (
+            <div style={{
+              padding: '6px 10px', borderRadius: 4, marginBottom: 8,
+              fontSize: 11,
+              background: CONFIDENCE_STYLE[confidence.level].bg,
+              border: `1px solid ${CONFIDENCE_STYLE[confidence.level].bd}`,
+              color: CONFIDENCE_STYLE[confidence.level].fg,
+            }}>
+              <span style={{ fontWeight: 'bold' }}>의사결정 {confidence.label}</span>
+              <span style={{ color: '#94a3b8', marginLeft: 6 }}>· {confidence.reason}</span>
+            </div>
+          )}
+
+          {/* 정량 비교 테이블 */}
+          <ComparisonTable scenarios={scenarios} />
 
           {/* 분포 요약 카드 (텍스트만, 도넛 차트 제거) */}
           {realScenarios.length > 0 && (

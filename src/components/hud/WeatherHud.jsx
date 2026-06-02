@@ -38,18 +38,21 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
     return best;
   }, [shipPos.lat, shipPos.lon, weatherData, currentRouteKey, isMouseMode]);
 
-  if (!nearest) return null;
+  // //* [Modified Code] 백엔드 다운(weatherData=null)이나 근접 waypoint 부재 시에도
+  // 패널이 사라지지 않도록 선박/마우스 위치의 위도 기반 추정값으로 렌더한다.
+  // 위치 자체가 없을 때만 렌더를 포기한다.
+  const lat = nearest?.lat ?? shipPos?.lat;
+  if (lat == null) return null;
 
-  // //* [Modified Code] null fallback: API 데이터 없을 시 위도 기반 추정값 사용
-  const lat = nearest.lat ?? shipPos.lat;
+  const isEstimate = !nearest; // 실측 waypoint 없음 → 전 지표 추정값
   const fallbackWave = lat > 78 ? 0.6 : lat > 68 ? 1.5 : lat > 50 ? 2.8 : 1.8;
   const fallbackVis = lat > 80 ? 2.0 : lat > 74 ? 5.0 : lat > 68 ? 8.0 : lat > 55 ? 12.0 : 15.0;
   const fallbackTemp = lat > 80 ? -1.8 : lat > 70 ? -0.5 : lat > 60 ? 2.1 : 8.5;
 
-  const wave = nearest.wave_height_m ?? fallbackWave;
-  const vis = nearest.visibility_km ?? fallbackVis;
-  const temp = nearest.temperature_c ?? fallbackTemp;
-  const sst = nearest.sst_c ?? null;
+  const wave = nearest?.wave_height_m ?? fallbackWave;
+  const vis = nearest?.visibility_km ?? fallbackVis;
+  const temp = nearest?.temperature_c ?? fallbackTemp;
+  const sst = nearest?.sst_c ?? null;
 
   // 해무 위험도: SST와 기온 차이 기반 (SST > 기온 → 해무 발생 가능)
   const fogDiff = (sst != null && temp != null) ? sst - temp : null;
@@ -106,6 +109,19 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
       }}>
         <span style={{ fontSize: 14 }}>{isMouseMode ? '🖱' : '🌊'}</span>
         <span>해역 기상</span>
+        {isEstimate && (
+          <span style={{
+            fontSize: 8,
+            color: '#f59e0b',
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            borderRadius: 4,
+            padding: '1px 4px',
+            fontWeight: 600,
+            letterSpacing: 0.3,
+          }}>
+            추정
+          </span>
+        )}
         <span style={{
           marginLeft: 'auto',
           fontSize: 9,
@@ -116,7 +132,7 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>
-          {isMouseMode ? '마우스 탐색' : nearest.name}
+          {isMouseMode ? '마우스 탐색' : (nearest?.name ?? '위치 기반 추정')}
         </span>
       </div>
       {/* 마우스 모드: 좌표 + 웨이포인트명 / 항해 모드: 웨이포인트명만 */}
@@ -129,8 +145,8 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
         whiteSpace: 'nowrap',
       }}>
         {isMouseMode
-          ? `${shipPos.lat.toFixed(2)}°N ${shipPos.lon.toFixed(2)}°E → ${nearest.name}`
-          : nearest.name}
+          ? `${shipPos.lat.toFixed(2)}°N ${shipPos.lon.toFixed(2)}°E${nearest ? ` → ${nearest.name}` : ''}`
+          : (nearest?.name ?? `${lat.toFixed(1)}°N · 실측 데이터 대기 중`)}
       </div>
 
       {/* 5개 기상 지표 */}

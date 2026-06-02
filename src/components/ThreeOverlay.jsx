@@ -6,7 +6,8 @@ import React, {
   useCallback,
 } from 'react';
 import * as THREE from 'three';
-// 테스트 주석
+// sea-state 합성 모델은 shipSimulator 단일 출처를 재사용 (중복 정의 제거)
+import { getSeaState } from '../services/shipSimulator';
 // ── Constants ────────────────────────────────────────────────────────────────
 const MOUSE_SENS = 0.0004;
 const MAX_ROT = 0.03;
@@ -193,14 +194,6 @@ function edgeToRGB(conc) {
 }
 
 // ── Sea state / ship motion helpers ──────────────────────────────────────────
-function getSeaState(lat) {
-  if (lat > 78) return { Hs: 0.6, Tp: 8, label: 'icy waters - low waves' };
-  if (lat > 68) return { Hs: 1.5, Tp: 10, label: 'ice edge - moderate waves' };
-  if (lat > 50)
-    return { Hs: 2.8, Tp: 12, label: 'arctic open ocean - high waves' };
-  return { Hs: 1.8, Tp: 9, label: 'coastal waters' };
-}
-
 function fovFromSpeed(kn) {
   if (kn <= 0) return 85;
   if (kn <= 8) return 85 + (kn / 8) * 3;

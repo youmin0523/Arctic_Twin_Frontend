@@ -12,11 +12,21 @@ import { checkRouteAhead, rerouteAroundIceberg } from './icebergAvoidance';
 import { mergeDetourSmooth, rlPositionsToWaypoints } from './smoothPathGenerator';
 import { buildTimings, routePos } from './shipSimulator';
 import { landAhead, initLandMask, isLandMaskReady } from './arcticPathfinder';
+import {
+  landAheadGlobal,
+  findWaterDetour,
+  isGlobalLandMaskReady,
+  initGlobalLandMask,
+} from './landMaskGlobal';
+import { RL_CONTROLLER_CONFIG } from '../data/rlConfig';
+import { createAvoidanceMetrics } from './avoidanceMetrics';
+import { mostImminentThreat } from './cpaTcpa';
 
-const POLL_INTERVAL_MS = 2000;     // 2초마다 확인
-const DETECTION_RADIUS_KM = 50;    // 50km 이내 빙산 감지
-const LAND_LOOKAHEAD_KM = 90;      // 전방 90km 육지 감지
-const MIN_RL_CONFIDENCE = 0.3;     // RL 최소 신뢰도 (미만 시 A* 폴백)
+// 설정 상수는 rlConfig.js 를 단일 출처로 사용 (중복 하드코딩 제거)
+const POLL_INTERVAL_MS = RL_CONTROLLER_CONFIG.POLL_INTERVAL_MS;     // 폴링 주기
+const DETECTION_RADIUS_KM = RL_CONTROLLER_CONFIG.DETECTION_RADIUS_KM; // 빙산 감지 반경
+const MIN_RL_CONFIDENCE = RL_CONTROLLER_CONFIG.MIN_CONFIDENCE;      // RL 최소 신뢰도
+const LAND_LOOKAHEAD_KM = 90;      // 전방 90km 육지 감지 (육지 전용 — config 무관)
 const DEG_TO_KM = 111.32;
 
 function approxDistKm(lat1, lon1, lat2, lon2) {
@@ -92,7 +102,8 @@ export function createRLAvoidanceController(options) {
   let intervalId = null;
   let isProcessing = false;
   let lastRerouteTime = 0;
-  const REROUTE_COOLDOWN_MS = 15000; // 재경로 설정 쿨다운 15초
+  const REROUTE_COOLDOWN_MS = RL_CONTROLLER_CONFIG.REROUTE_COOLDOWN_MS; // 재경로 쿨다운
+  const metrics = createAvoidanceMetrics(); // 회피 관측성 수집기
 
   async function tick() {
     if (isProcessing) return;
@@ -102,6 +113,7 @@ export function createRLAvoidanceController(options) {
 
     const ship = getShipState();
     if (!ship) return;
+    metrics.recordCheck();
     const icebergs = getIcebergs() || [];
 
     const wps = getActiveWps();
@@ -124,10 +136,10 @@ export function createRLAvoidanceController(options) {
       bergDangerIdx = res.dangerIdx;
     }
 
-    // ── 2) 육지 위협 판정 (학습된 RL 모델의 육지 회피 발동 조건) ──
-    const land = landAhead(
-      ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 8,
-    );
+    // ── 2) 육지 위협 판정 — 전역 마스크 우선(전 위도), 미로드 시 북극 마스크 ──
+    const land = isGlobalLandMaskReady()
+      ? landAheadGlobal(ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 6)
+      : landAhead(ship.lat, ship.lon, ship.heading || 0, LAND_LOOKAHEAD_KM, 8);
 
     // 빙산도 육지도 위협 없으면 종료
     if (!bergBlocked && !land.blocked) return;
@@ -140,7 +152,20 @@ export function createRLAvoidanceController(options) {
       ? bergDangerIdx
       : Math.min(currentSeg + 3, wps.length - 1);
 
+    // CPA/TCPA 로 가장 임박한 빙산 위협의 최근접 시각(시간) 산출 — 임박도 관측용.
+    // (빙산은 정지로 가정; 선박 속도/방위로 상대 접근을 계산)
+    let tcpaHours;
+    if (threatType === 'iceberg' && nearbyBergs.length > 0) {
+      const imminent = mostImminentThreat(
+        { lat: ship.lat, lon: ship.lon, speedKnots: ship.speed_knots || 14, headingDeg: ship.heading || 0 },
+        nearbyBergs,
+        { safetyKm: RL_CONTROLLER_CONFIG.SAFETY_RADIUS_KM, horizonHours: 6 },
+      );
+      if (imminent) tcpaHours = imminent.tcpaHours;
+    }
+
     // 위협 감지 — 회피 경로 계산 시작
+    metrics.recordThreat(threatType, tcpaHours);
     isProcessing = true;
     let method = 'unknown'; // finally 에서도 참조하므로 try 밖에 선언
 
@@ -154,6 +179,44 @@ export function createRLAvoidanceController(options) {
         5000,
       );
 
+      let newWaypoints = null;
+      let newProgress = progress;
+
+      // 육지 위협 + 전역 마스크 → 전역 A* 해상 우회 (RL은 빙산 전용이라 육지엔 부적합)
+      if (threatType === 'land' && isGlobalLandMaskReady()) {
+        const margin = 3;
+        const insertStart = Math.max(0, currentSeg);
+        const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
+        const sWp = wps[insertStart];
+        const eWp = wps[insertEnd];
+        const detour = findWaterDetour(
+          { lon: sWp.lon, lat: sWp.lat },
+          { lon: eWp.lon, lat: eWp.lat },
+        );
+        if (detour && detour.length > 0) {
+          method = 'GlobalA*';
+          const detourWps = detour.map((p) => ({ lon: p.lon, lat: p.lat, label: '육지 회피' }));
+          // 스무딩 없이 스플라이스 — 스플라인이 육지로 휘어 무교차 보장이 깨지는 것 방지.
+          const spliced = [
+            ...wps.slice(0, insertStart + 1),
+            ...detourWps,
+            ...wps.slice(insertEnd),
+          ];
+          // 진행도 재매핑(선박 위치 점프 방지)
+          const oldTimings = buildTimings(wps);
+          const newTimings = buildTimings(spliced);
+          const curPos = routePos(progress, oldTimings, wps);
+          let bestT = progress, bestD = Infinity;
+          for (const tp of newTimings) {
+            const d = approxDistKm(curPos.lat, curPos.lon, tp.lat, tp.lon);
+            if (d < bestD) { bestD = d; bestT = tp.t; }
+          }
+          newWaypoints = spliced;
+          newProgress = bestT;
+        }
+      }
+
+      if (!newWaypoints) {
       const iceData = getIceData();
       const weather = getWeather() || { visibility_km: 10, wave_height_m: 1 };
       const iceClass = getIceClass() || 'PC5';
@@ -178,8 +241,7 @@ export function createRLAvoidanceController(options) {
         weather,
       );
 
-      let newWaypoints = null;
-      let newProgress = progress;
+      metrics.recordRLAttempt(rlResult.confidence);
 
       if (
         !rlResult.fallback &&
@@ -241,6 +303,7 @@ export function createRLAvoidanceController(options) {
           }
         }
       }
+      } // end if(!newWaypoints) — 빙산 RL/A* 경로
 
       // 병합 결과 정합성 검사 — 특이점 폭주 경로면 적용하지 않음(현재 경로 유지)
       if (newWaypoints && !isWaypointListSane(newWaypoints)) {
@@ -258,13 +321,21 @@ export function createRLAvoidanceController(options) {
           },
         });
         lastRerouteTime = Date.now();
+        metrics.recordOutcome({ method, applied: true });
         dispatch({ type: 'SET_AVOIDANCE', payload: { active: true, type: threatType, method } });
         showToast(
           `${threatType === 'land' ? '육지' : '빙산'} 회피 경로 적용 완료 (${method})`,
           3000,
         );
-        console.log(`[RL Controller] ${threatType}/${method} 회피 경로 적용: ${newWaypoints.length}개 웨이포인트`);
+        const snap = metrics.snapshot();
+        console.log(
+          `[RL Controller] ${threatType}/${method} 회피 적용: ${newWaypoints.length}개 wp ` +
+          `| RL성공률 ${(snap.rlSuccessRate * 100).toFixed(0)}% ` +
+          `폴백률 ${(snap.fallbackRate * 100).toFixed(0)}% ` +
+          `평균신뢰도 ${snap.avgConfidence.toFixed(2)} (적용 ${snap.applied}/위협 ${snap.threats})`,
+        );
       } else {
+        metrics.recordOutcome({ method, applied: false });
         showToast('우회 경로 탐색 실패 — 현재 경로 유지', 3000);
       }
     } catch (e) {
@@ -285,6 +356,9 @@ export function createRLAvoidanceController(options) {
       if (!isLandMaskReady()) {
         initLandMask().catch(() => {});
       }
+      if (!isGlobalLandMaskReady()) {
+        initGlobalLandMask().catch(() => {});
+      }
       intervalId = setInterval(tick, POLL_INTERVAL_MS);
       console.log('[RL Controller] 시작 (2초 간격, 빙산+육지 회피)');
     },
@@ -294,6 +368,15 @@ export function createRLAvoidanceController(options) {
         clearInterval(intervalId);
         intervalId = null;
         console.log('[RL Controller] 중지');
+        // 세션 회피 메트릭을 백엔드에 영속화(세션 간 추세 분석). fire-and-forget.
+        const snap = metrics.snapshot();
+        if (snap.threats > 0 && typeof fetch === 'function') {
+          fetch('/api/avoidance/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...snap, iceClass: getIceClass?.() }),
+          }).catch(() => {}); // 네트워크 실패는 무시(관측성은 보조 기능)
+        }
       }
     },
 
@@ -303,6 +386,11 @@ export function createRLAvoidanceController(options) {
 
     get isProcessing() {
       return isProcessing;
+    },
+
+    /** 회피 관측성 지표 스냅샷 (RL 성공률/폴백률/평균신뢰도 등) */
+    getMetrics() {
+      return metrics.snapshot();
     },
 
     /** 수동으로 즉시 확인 실행 */
