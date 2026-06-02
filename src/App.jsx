@@ -18,6 +18,7 @@ import TeleportOverlay from './components/hud/TeleportOverlay';
 import Minimap from './components/hud/Minimap';
 import WeatherHud from './components/hud/WeatherHud';
 import RLProgressOverlay from './components/hud/RLProgressOverlay';
+import AvoidanceMetricsHUD from './components/hud/AvoidanceMetricsHUD';
 import TrendReportProgressOverlay from './components/hud/TrendReportProgressOverlay';
 import TrendReportPanel from './components/hud/TrendReportPanel';
 import WhatIfPanel from './components/hud/WhatIfPanel';
@@ -2799,6 +2800,14 @@ function AppInner() {
             proximityAlert={state.proximityAlert}
             avoidance={state.avoidance}
           />
+
+          {/* AI 자율 회피 런타임 지표 (RL 성공률/폴백률/평균신뢰도) */}
+          <div style={{ position: 'absolute', left: 12, bottom: 90, zIndex: 280, pointerEvents: 'none' }}>
+            <AvoidanceMetricsHUD
+              getMetrics={() => rlControllerRef.current?.getMetrics()}
+              active={state.isSimulating && !state.manualMode}
+            />
+          </div>
 
           {/* 웨이포인트 에디터 (단계 C) — 글로브 위 직접 편집 + 패널 */}
           <WaypointEditor
