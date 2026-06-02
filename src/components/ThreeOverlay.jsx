@@ -1285,23 +1285,86 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
   // ── Imperative methods exposed to parent via ref ──────────────────────────
 
   // animateOcean: wave vertex animation
+  // //* [Modified Code] 수면을 실데이터 + 전진감으로 구동:
+  //   1) 파고(Hs)·주기(Tp)·파향(dirDeg) 반영 — updateShipMotion 이 매 프레임 공유하는
+  //      c.seaHs/seaTp/seaDirRad 값을 그대로 사용(실값 있으면 weather 데이터, 없으면 위도 합성).
+  //        · Hs  → 파 진폭(시각적으로 자연스러운 범위로 압축)
+  //        · Tp  → 시간 위상속도(긴 주기 = 느린 파)
+  //        · dir → 방향성 swell(파가 진행하는 방향으로 마루가 이동)
+  //   2) 선체 전방(bow) 방향으로 샘플 좌표를 누적 이동(flow)시켜 수면이 선미 쪽으로
+  //      흘러가도록 → 순항 중인 배가 물살을 가르며 전진하는 시각. 정지 시 흐름 멈춤.
   const animateOcean = useCallback((t, shipRef) => {
-    const { waveGeo, waveMesh } = ctx.current;
+    const c = ctx.current;
+    const { waveGeo, waveMesh } = c;
     if (!waveGeo || !waveMesh) return;
     const sx = shipRef ? shipRef.x : 0;
     const sz = shipRef ? shipRef.z : 0;
     waveMesh.position.x = sx;
     waveMesh.position.z = sz;
+
+    // ── 전진감 flow: 선체 전방(bow) 방향으로 샘플 좌표 누적 이동 ──
+    // bow = (-sin ry, -cos ry) — 호위/카메라 규약과 동일.
+    const ry = c.shipGroup3 ? c.shipGroup3.rotation.y : 0;
+    const bowX = -Math.sin(ry);
+    const bowZ = -Math.cos(ry);
+    const dt = c.oceanLastT ? Math.min(0.1, t - c.oceanLastT) : 0.016;
+    c.oceanLastT = t;
+    // seaFlowSpeed: 렌더 루프가 매 프레임 선박 실제 이동속도(units/s)로 갱신.
+    // 1x 순항(≈5 units/s) → factor≈1, 고배율/수동 가속 → 1.5 로 클램프, 정지 → 0.
+    const SPEED_REF = 5;
+    const CRUISE_FLOW = 150; // 화면상 수면 흐름속도(units/s)
+    const factor = Math.min(1.5, (c.seaFlowSpeed || 0) / SPEED_REF);
+    c.oceanFlow = (c.oceanFlow || 0) + CRUISE_FLOW * factor * dt;
+    const fX = bowX * c.oceanFlow;
+    const fZ = bowZ * c.oceanFlow;
+
+    // ── 실데이터 반영: 파고(Hs)·주기(Tp)·파향(dirRad) ──
+    const Hs = typeof c.seaHs === 'number' ? c.seaHs : 1.2;
+    const Tp = typeof c.seaTp === 'number' && c.seaTp > 0 ? c.seaTp : 8;
+    // 파고 → 진폭 게인 (실제 m 를 월드 유닛 파고로 자연스럽게 압축, 선체높이 대비 과하지 않게)
+    const amp = Math.min(2.0, Math.max(0.35, Hs * 0.5));
+    const omega = (2 * Math.PI) / Tp; // 주기 → 위상속도
+    const dirRad = typeof c.seaDirRad === 'number' ? c.seaDirRad : null;
+
     const pos = waveGeo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i) + sx;
-      const z = pos.getZ(i) + sz;
-      pos.setY(
-        i,
-        Math.sin(x * 0.00012 + t * 0.24) * 0.42 +
-          Math.cos(z * 0.00015 + t * 0.16) * 0.3 +
-          Math.sin((x + z) * 0.00008 + t * 0.12) * 0.24,
-      );
+    if (dirRad !== null) {
+      // 방향성 swell — 파가 "오는" 방위 dir → 진행방향 = dir+180 = (-sin, +cos)
+      const pX = -Math.sin(dirRad);
+      const pZ = Math.cos(dirRad);
+      const qX = pZ; // 진행축 직교(가로)
+      const qZ = -pX;
+      const kMain = 0.00016; // 주 파장(렌더 가능 대역)
+      const kDet = 0.0013;
+      const kCross = 0.0019;
+      for (let i = 0; i < pos.count; i++) {
+        const wx = pos.getX(i) + sx + fX;
+        const wz = pos.getZ(i) + sz + fZ;
+        const dp = wx * pX + wz * pZ; // 진행축 좌표
+        const dq = wx * qX + wz * qZ; // 가로축 좌표
+        // -t*omega: 마루가 진행방향(+P)으로 이동
+        pos.setY(
+          i,
+          amp * Math.sin(dp * kMain - t * omega * 1.1) +
+            amp * 0.4 * Math.sin(dp * kDet - t * omega * 2.0) +
+            amp * 0.25 * Math.cos(dq * kCross + t * omega * 1.6) +
+            amp * 0.15 * Math.sin((dp - dq) * 0.0026 - t * omega * 2.6),
+        );
+      }
+    } else {
+      // 파향 정보 없음 — 등방성 합성(파고·주기 스케일만 반영)
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i) + sx + fX;
+        const z = pos.getZ(i) + sz + fZ;
+        pos.setY(
+          i,
+          amp * 0.42 * Math.sin(x * 0.00012 + t * omega * 0.9) +
+            amp * 0.3 * Math.cos(z * 0.00015 + t * omega * 0.7) +
+            amp * 0.24 * Math.sin((x + z) * 0.00008 + t * omega * 0.5) +
+            amp * 0.16 * Math.sin(x * 0.0012 + t * 0.9) +
+            amp * 0.12 * Math.cos(z * 0.0016 + t * 1.1) +
+            amp * 0.08 * Math.sin((x - z) * 0.0026 + t * 1.4),
+        );
+      }
     }
     pos.needsUpdate = true;
     waveGeo.computeVertexNormals();
@@ -1492,6 +1555,14 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       Tp = st.Tp;
     }
     c.lastWaveSource = waveSource;
+    // //* [Modified Code] 수면 렌더(animateOcean)가 동일한 파고/주기/파향을 쓰도록 공유.
+    //   파향은 실데이터(dirDeg)가 있을 때만 방향성 swell 로 반영, 없으면 등방성.
+    c.seaHs = Hs;
+    c.seaTp = Tp;
+    c.seaDirRad =
+      c.realWaveInput && typeof c.realWaveInput.dirDeg === 'number'
+        ? (c.realWaveInput.dirDeg * Math.PI) / 180
+        : null;
     c.motionWavePhase = (c.motionWavePhase + dt * ((2 * Math.PI) / Tp)) % (Math.PI * 200);
 
     const zetaR = 0.05;
@@ -1713,24 +1784,72 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
     }
   }, [mode]);
 
-  // updateNightMode: polar night lighting transition
+  // 실제 날씨(가시거리·기온·파고) 주입 — App 이 최근접 weather waypoint 기준으로 호출.
+  // null 전달 시 '맑음' 기본값으로 복귀. 실제 시각 적용은 updateNightMode 가 매 프레임 lerp.
+  const setWeatherVisuals = useCallback((input) => {
+    const c = ctx.current;
+    if (!input) {
+      c.weatherVisibilityKm = null;
+      c.weatherTempC = null;
+      c.weatherHs = null;
+      return;
+    }
+    c.weatherVisibilityKm =
+      typeof input.visibilityKm === 'number' ? input.visibilityKm : null;
+    c.weatherTempC =
+      typeof input.temperatureC === 'number' ? input.temperatureC : null;
+    c.weatherHs = typeof input.Hs === 'number' ? input.Hs : null;
+  }, []);
+
+  // updateNightMode: polar night lighting transition + 실제 날씨 반영
+  // //* [Modified Code] 가시거리 → 안개 밀도/연무, 파고·저가시 → 흐림(overcast)으로
+  //   하늘 배경/안개색 회색화 + 광량 감소. 극야(nightFactor)와 자연스럽게 합성.
   const updateNightMode = useCallback((lat) => {
     const c = ctx.current;
     const tgt = lat > 82 ? 1 : 0;
     c.nightFactor += (tgt - c.nightFactor) * 0.005;
 
+    // ── 실제 날씨 타겟 (없으면 맑음 가정) ──
+    const visKm =
+      typeof c.weatherVisibilityKm === 'number' ? c.weatherVisibilityKm : 18;
+    const Hs = typeof c.weatherHs === 'number' ? c.weatherHs : 1.0;
+    const visNorm = Math.max(0.05, Math.min(1, visKm / 20));
+    // 거친 바다(Hs↑) 또는 낮은 가시거리 → 흐림(0..1)
+    const overcast = Math.max(
+      0,
+      Math.min(1, Math.max((Hs - 1.0) / 4.0, 1 - visNorm)),
+    );
+    c.weatherOvercast = overcast;
+    const dim = 1 - overcast * 0.45; // 흐릴수록 광량 감소
+
     if (c.ambientLight) {
-      const tgtA = 0.15 + 0.55 * (1 - c.nightFactor);
+      const tgtA = (0.15 + 0.55 * (1 - c.nightFactor)) * dim;
       c.ambientLight.intensity += (tgtA - c.ambientLight.intensity) * 0.02;
     }
     if (c.sunLight) {
-      const tgtS = 0.3 + 1.1 * (1 - c.nightFactor);
+      const tgtS = (0.3 + 1.1 * (1 - c.nightFactor)) * dim;
       c.sunLight.intensity += (tgtS - c.sunLight.intensity) * 0.02;
     }
     if (c.scene && c.scene.fog) {
       const nightC = new THREE.Color(0x050d18);
-      const dayC = new THREE.Color(0x7a9fb5);
+      const clearC = new THREE.Color(0x7a9fb5);
+      const overcastC = new THREE.Color(0x9aa6ad);
+      const dayC = clearC.clone().lerp(overcastC, overcast);
       c.scene.fog.color.lerp(c.nightFactor > 0.5 ? nightC : dayC, 0.02);
+      // 가시거리 낮을수록 짙은 안개/연무 (FogExp2 density)
+      const densTarget = 0.00009 + (1 - visNorm) * 0.0006;
+      c.scene.fog.density += (densTarget - c.scene.fog.density) * 0.02;
+    }
+    // 하늘 배경(clear color)도 밤/흐림에 맞춰 부드럽게 전환
+    if (c.renderer) {
+      const nightBg = new THREE.Color(0x070f1c);
+      const clearBg = new THREE.Color(0x1a3a5c);
+      const overcastBg = new THREE.Color(0x55606a);
+      const dayBg = clearBg.clone().lerp(overcastBg, overcast);
+      const target = c.nightFactor > 0.5 ? nightBg : dayBg;
+      if (!c.bgColor) c.bgColor = clearBg.clone();
+      c.bgColor.lerp(target, 0.02);
+      c.renderer.setClearColor(c.bgColor, 1);
     }
   }, []);
 
@@ -1884,6 +2003,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       setVoyageMotionBias,
       setVoyageIceContext,
       setRealWaveInput,
+      setWeatherVisuals,
       setAraonState,
       updateNightMode,
       syncThreeIcebergs,
@@ -1903,6 +2023,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       setVoyageMotionBias,
       setVoyageIceContext,
       setRealWaveInput,
+      setWeatherVisuals,
       setAraonState,
       updateNightMode,
       syncThreeIcebergs,
@@ -2245,6 +2366,20 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
             ? Math.abs(parseFloat(shipState?.manualSpeed) || 0) * 0.5
             : 7.7;
           updateFoam(motionDt, -hdg, speedMS, shipGroup3.position);
+
+          // //* [Modified Code] 수면 흐름(전진감)용 실제 이동속도 측정 (units/s, 평활화).
+          //   lat/lon→world 직접 set/수동 이동을 모두 포착 → 정지 시 0(흐름 멈춤),
+          //   시간배율↑/가속 시 커진다(animateOcean 에서 자연스러운 범위로 클램프).
+          const sp = shipGroup3.position;
+          const lp = ctx.current.flowLastPos;
+          if (lp && motionDt > 1e-3) {
+            const dxp = sp.x - lp.x;
+            const dzp = sp.z - lp.z;
+            const inst = Math.sqrt(dxp * dxp + dzp * dzp) / motionDt;
+            ctx.current.seaFlowSpeed =
+              (ctx.current.seaFlowSpeed || 0) * 0.85 + inst * 0.15;
+          }
+          ctx.current.flowLastPos = { x: sp.x, z: sp.z };
         }
 
         // Night mode (극야) — 고위도(82°N+)에서 조명 어둡게
@@ -2310,8 +2445,15 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
               const fz = -Math.cos(shipRy);
               const rx = Math.cos(shipRy);
               const rz = -Math.sin(shipRy);
-              targetX = sp.x + fx * cfg.forwardM + rx * cfg.sideM;
-              targetZ = sp.z + fz * cfg.forwardM + rz * cfg.sideM;
+              // //* [Modified Code] 정면 앞 선도 대형:
+              //   본선 정면 앞쪽에 충분한 간격(lead)을 두고 배치 → 아라온이 앞장서
+              //   얼음을 깨며 길을 내고 본선이 그 항로를 따라 진행하는 모습.
+              //   선박이 클수록(=카메라 거리 큼) 간격도 비례해 키워 '바짝 붙은' 느낌 제거.
+              let lead = cfg.forwardM;
+              if (specs?.type === 'lng') lead *= 1.6;
+              else if (specs?.type === 'container') lead *= 1.35;
+              targetX = sp.x + fx * lead + rx * cfg.sideM;
+              targetZ = sp.z + fz * lead + rz * cfg.sideM;
               targetRy = shipRy;
             } else if (c.araonMode === 'dock' && c.araonDockDelta) {
               const dd = c.araonDockDelta;

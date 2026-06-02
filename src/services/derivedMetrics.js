@@ -275,6 +275,11 @@ export function nearestWaveAt(weatherData, lat, lon, maxDistKm = 1500) {
     height: best.wave_height_m,
     direction: best.wave_direction_deg ?? null, // 없으면 스칼라 모드
     period: best.wave_period_s ?? null,
+    // //* [Modified Code] 화면 날씨(안개·하늘·조명) 반영용 — 가시거리·기온도 함께 반환
+    visibilityKm:
+      typeof best.visibility_km === 'number' ? best.visibility_km : null,
+    temperatureC:
+      typeof best.temperature_c === 'number' ? best.temperature_c : null,
     distKm: bestD,
   };
 }

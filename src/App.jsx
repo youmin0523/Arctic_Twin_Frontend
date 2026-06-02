@@ -282,13 +282,15 @@ function AppInner() {
           araon.status === 'escorting' || araon.status === 'rendezvous';
 
         if (isEscorting) {
-          // 호위/랑데부 중 — trace 좌표 무시하고 본선 앞에 강제 배치
-          // forwardM: 본선 뱃머리 앞 거리 (Three.js 유닛, 3D 모델 크기 고려)
+          // 호위/랑데부 중 — trace 좌표 무시하고 본선 정면 앞에서 선도
+          // //* [Modified Code] 정면 선도 대형: 옆 offset 제거(sideM 0) + 간격 확대.
+          //   아라온이 앞장서 길을 내고 본선이 그 항로를 따르는 에스코트 모습.
+          //   (선박 크기별 추가 스케일은 ThreeOverlay escort 블록에서 적용)
           three.setAraonState({
             visible: true,
             escortOverride: {
-              forwardM: 600,   // 본선 전방 ~600 유닛 (살짝 왼쪽으로 offset 가능)
-              sideM: -80,      // 본선 좌측으로 살짝 비켜서 뱃머리 시야 확보
+              forwardM: 950,   // 본선 정면 전방 간격 (선도 거리)
+              sideM: 0,        // 정면 정렬
             },
           });
         } else {
@@ -1272,8 +1274,13 @@ function AppInner() {
   useEffect(() => {
     const three = threeRef.current;
     if (!three || !three.setRealWaveInput) return;
-    if (!weatherData) {
+    // //* [Modified Code] 화면 날씨(안개·하늘·조명)도 같은 weather 데이터로 반영
+    const clearWeather = () => {
       three.setRealWaveInput(null);
+      if (three.setWeatherVisuals) three.setWeatherVisuals(null);
+    };
+    if (!weatherData) {
+      clearWeather();
       return;
     }
     let lat;
@@ -1282,7 +1289,7 @@ function AppInner() {
     if (voyageActive && voyage.trace) {
       const ship = sampleShipAt(voyage.trace, voyage.tHours);
       if (!ship) {
-        three.setRealWaveInput(null);
+        clearWeather();
         return;
       }
       lat = ship.position.lat;
@@ -1293,12 +1300,12 @@ function AppInner() {
       lon = state.shipState.lon;
       headingDeg = state.shipState.heading;
     } else {
-      three.setRealWaveInput(null);
+      clearWeather();
       return;
     }
     const wave = nearestWaveAt(weatherData, lat, lon);
     if (!wave || typeof wave.height !== 'number') {
-      three.setRealWaveInput(null);
+      clearWeather();
       return;
     }
     three.setRealWaveInput({
@@ -1307,6 +1314,14 @@ function AppInner() {
       dirDeg: wave.direction,
       headingDeg,
     });
+    // 가시거리·기온·파고 → 3D 씬 날씨(안개 밀도/하늘 회색화/광량)
+    if (three.setWeatherVisuals) {
+      three.setWeatherVisuals({
+        visibilityKm: wave.visibilityKm,
+        temperatureC: wave.temperatureC,
+        Hs: wave.height,
+      });
+    }
   }, [
     weatherData,
     voyageActive,
@@ -2050,9 +2065,10 @@ function AppInner() {
     const needsEscort = sic > 0.3;
 
     if (needsEscort) {
+      // //* [Modified Code] 정면 앞 선도 대형 (옆 offset 제거 + 간격 확대)
       three.setAraonState({
         visible: true,
-        escortOverride: { forwardM: 600, sideM: -80 },
+        escortOverride: { forwardM: 950, sideM: 0 },
       });
       if (three.setVoyageIceContext) {
         const estThickness = 0.3 + sic * 2.0;
