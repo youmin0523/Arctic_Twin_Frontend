@@ -7,6 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
     "copy:simulations": "node -e \"const fs=require('fs'),p=require('path');const s=p.resolve('../backend/data/simulations'),d=p.resolve('public/simulations');fs.mkdirSync(d,{recursive:true});for(const f of fs.readdirSync(s))if(f.endsWith('.json'))fs.copyFileSync(p.join(s,f),p.join(d,f));console.log('copied simulations');\""
   },
   "dependencies": {
@@ -21,8 +25,13 @@
     "three": "^0.160.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^4.2.1",
+    "jsdom": "^25.0.1",
     "vite": "^5.2.0",
-    "vite-plugin-cesium": "^1.2.22"
+    "vite-plugin-cesium": "^1.2.22",
+    "vitest": "^2.1.9"
   }
 }

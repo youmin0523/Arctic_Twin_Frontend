@@ -196,7 +196,7 @@ function snapToOcean(col, row, grid) {
 
 // ─── 비용 함수 ────────────────────────────────────────────────────────────────
 
-function edgeCost(fromCol, fromRow, toCol, toRow, grid, maxSafeConcentration) {
+function edgeCost(fromCol, fromRow, toCol, toRow, grid, maxSafeConcentration, weatherPen = 0) {
   const idx = toRow * GRID_COLS + toCol;
   const concentration = grid[idx];
 
@@ -212,7 +212,10 @@ function edgeCost(fromCol, fromRow, toCol, toRow, grid, maxSafeConcentration) {
     ? (concentration / maxSafeConcentration) * 1.5
     : 0;
 
-  return baseMoveCost * (1 + icePenalty);
+  // 기상 패널티: 파고·시정 기반(0~1)을 동일 스케일(1.5)로 반영 → 거친 바다 우회 유도
+  const weatherPenalty = Math.max(0, Math.min(1, weatherPen)) * 1.5;
+
+  return baseMoveCost * (1 + icePenalty + weatherPenalty);
 }
 
 // ─── 휴리스틱 ────────────────────────────────────────────────────────────────
@@ -330,6 +333,8 @@ function simplifyPath(points, angleDegThreshold) {
  * @param {Object} dataset  현재 월의 해빙 데이터 { cells: [...] }
  * @param {number} maxSafeConcentration 선박 등급별 최대 통과 가능 농도
  * @param {Array}  icebergs 빙산 위치 배열 [{ lat, lon, length_m }] (선택)
+ * @param {Function} [weatherSampler] (lon,lat)=>penalty[0,1] — 기상 비용 샘플러(선택).
+ *   주어지면 거친 바다·저시정 해역의 통항 비용이 증가해 동적 우회를 유도한다.
  * @returns {Array<[number, number]>|null} [lon, lat] 웨이포인트 배열, 경로 없으면 null
  */
 export function findArcticPath(
@@ -339,7 +344,8 @@ export function findArcticPath(
   goalLat,
   dataset,
   maxSafeConcentration,
-  icebergs = []
+  icebergs = [],
+  weatherSampler = null
 ) {
   const clampedStartLat = Math.max(GRID_LAT_MIN, Math.min(GRID_LAT_MAX - 0.01, startLat));
   const clampedGoalLat  = Math.max(GRID_LAT_MIN, Math.min(GRID_LAT_MAX - 0.01, goalLat));
@@ -384,7 +390,14 @@ export function findArcticPath(
       const nr = currentRow + dr;
       if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
 
-      const cost = edgeCost(currentCol, currentRow, nc, nr, grid, maxSafeConcentration);
+      // 기상 샘플러가 있으면 이웃 셀 중심 좌표의 기상 페널티를 비용에 반영
+      let weatherPen = 0;
+      if (weatherSampler) {
+        const [clon, clat] = cellToLonLat(nc, nr);
+        const p = weatherSampler(clon, clat);
+        if (Number.isFinite(p)) weatherPen = p;
+      }
+      const cost = edgeCost(currentCol, currentRow, nc, nr, grid, maxSafeConcentration, weatherPen);
       if (!isFinite(cost)) continue;
 
       const neighborIdx = nr * GRID_COLS + nc;

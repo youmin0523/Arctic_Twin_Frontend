@@ -37,6 +37,12 @@ const mkProxy = (target) => ({
 
 export default defineConfig({
   plugins: [react(), cesium()],
+  // 순수 로직(서비스/계산 함수) 단위·골든 테스트 — DOM 불필요하므로 node 환경.
+  test: {
+    environment: 'node',
+    include: ['src/**/*.{test,spec}.{js,jsx}'],
+    globals: true,
+  },
   server: {
     port: 5173,
     proxy: {

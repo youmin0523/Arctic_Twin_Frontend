@@ -18,6 +18,7 @@ import TeleportOverlay from './components/hud/TeleportOverlay';
 import Minimap from './components/hud/Minimap';
 import WeatherHud from './components/hud/WeatherHud';
 import RLProgressOverlay from './components/hud/RLProgressOverlay';
+import AvoidanceMetricsHUD from './components/hud/AvoidanceMetricsHUD';
 import TrendReportProgressOverlay from './components/hud/TrendReportProgressOverlay';
 import TrendReportPanel from './components/hud/TrendReportPanel';
 import WhatIfPanel from './components/hud/WhatIfPanel';
@@ -49,6 +50,7 @@ import {
   routePos,
   routeHeading,
   calculateRouteDistanceKM,
+  estimateVoyageDays,
   getSeaState,
 } from './services/shipSimulator';
 
@@ -512,8 +514,8 @@ function AppInner() {
       const distKm = calculateRouteDistanceKM(activeWaypoints);
       // //! [Original Code] 하드코딩된 총 초 수
       //      const totalSec = getTotalSeconds(state.currentRouteKey);
-      // //* [Modified Code] 실측 거리 기반 동적 초 산출 (15노트 기준)
-      const dynamicDays = Math.max(1, Math.round(distKm / (15 * 1.852 * 24)));
+      // //* [Modified Code] 실측 거리 기반 동적 초 산출 (검증된 순수 함수로 통합)
+      const dynamicDays = estimateVoyageDays(activeWaypoints);
       const totalSec = dynamicDays * 86400;
       // 선박 물리 속도는 시뮬 배율과 무관 (배율은 시간 압축일 뿐)
       const speedKmH = distKm / (totalSec / 3600);
@@ -822,8 +824,7 @@ function AppInner() {
         //        const routeTotalSec = getTotalSeconds(routeKey);
         // //* [Modified Code] 동적 시간 계산
         const wps = activeWpRef.current;
-        const distKm = calculateRouteDistanceKM(wps);
-        const dynamicDays = Math.max(1, Math.round(distKm / (15 * 1.852 * 24)));
+        const dynamicDays = estimateVoyageDays(wps);
         const routeTotalSec = dynamicDays * 86400;
         const progress = Math.min(simElapsedRef.current / routeTotalSec, 1);
 
@@ -2799,6 +2800,14 @@ function AppInner() {
             proximityAlert={state.proximityAlert}
             avoidance={state.avoidance}
           />
+
+          {/* AI 자율 회피 런타임 지표 (RL 성공률/폴백률/평균신뢰도) */}
+          <div style={{ position: 'absolute', left: 12, bottom: 90, zIndex: 280, pointerEvents: 'none' }}>
+            <AvoidanceMetricsHUD
+              getMetrics={() => rlControllerRef.current?.getMetrics()}
+              active={state.isSimulating && !state.manualMode}
+            />
+          </div>
 
           {/* 웨이포인트 에디터 (단계 C) — 글로브 위 직접 편집 + 패널 */}
           <WaypointEditor
