@@ -17,6 +17,7 @@ import {
   findWaterDetour,
   isGlobalLandMaskReady,
   initGlobalLandMask,
+  isLandGlobal,
 } from './landMaskGlobal';
 import { RL_CONTROLLER_CONFIG } from '../data/rlConfig';
 import { createAvoidanceMetrics } from './avoidanceMetrics';
@@ -31,8 +32,23 @@ const DEG_TO_KM = 111.32;
 
 function approxDistKm(lat1, lon1, lat2, lon2) {
   const dLat = (lat2 - lat1) * DEG_TO_KM;
-  const dLon = (lon2 - lon1) * DEG_TO_KM * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+  // 날짜변경선(±180°) 교차 정규화 — 경도차를 [-180,180]로 보정해 거리 폭주 방지
+  let dLonDeg = lon2 - lon1;
+  if (dLonDeg > 180) dLonDeg -= 360;
+  else if (dLonDeg < -180) dLonDeg += 360;
+  const dLon = dLonDeg * DEG_TO_KM * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
   return Math.sqrt(dLat * dLat + dLon * dLon);
+}
+
+/** 웨이포인트 리스트의 최장 연속 구간(km) — 정합성 가드의 적응 기준값 산출용 */
+function maxSegmentKm(wps) {
+  if (!Array.isArray(wps) || wps.length < 2) return 0;
+  let mx = 0;
+  for (let i = 1; i < wps.length; i++) {
+    const d = approxDistKm(wps[i - 1].lat, wps[i - 1].lon, wps[i].lat, wps[i].lon);
+    if (d > mx) mx = d;
+  }
+  return mx;
 }
 
 /**
@@ -52,20 +68,46 @@ function isProjectedPathSane(path, ship) {
 }
 
 /**
- * 최종 우회 웨이포인트 정합성 검사.
- * 병합/스무딩 단계에서 경도 특이점으로 경로가 폭주하는 경우를 잡는다 —
- * 연속 웨이포인트 간 점프가 비정상적으로 크면(>500km) 적용을 거부.
+ * RL 투영 경로가 정밀 전역 육지 마스크 기준으로 육지를 통과하는지 검사.
+ * RL 모델이 학습한 육지는 거친 경계박스(한국 등 일부 제외)라, 육지 회피 경로를
+ * 채택하기 전 정밀 마스크로 한 번 더 검증해 연안/미학습 육지 통과를 막는다.
+ * 마스크 미로드 시 검증 불가 → false(통과 허용, A* 단계에서 별도 처리).
  */
-function isWaypointListSane(wps) {
+function rlProjectedHitsLand(path) {
+  if (!Array.isArray(path) || !isGlobalLandMaskReady()) return false;
+  for (const p of path) {
+    if (p && Number.isFinite(p.lat) && Number.isFinite(p.lon) && isLandGlobal(p.lat, p.lon)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 최종 우회 웨이포인트 정합성 검사.
+ * 병합/스무딩 단계에서 극점/날짜변경선 특이점으로 경로가 폭주하는 경우를 잡는다.
+ *
+ * 한계값은 고정 상수가 아니라 "원본 항로 자체의 최장 구간"을 기준으로 적응한다 —
+ * 북극 항로(NSR/TSR 등)는 정상적으로도 sparse 한 장거리 구간(최대 ~1200km)을 갖는데,
+ * 병합 시 이 원본 구간이 before/after 로 그대로 보존되므로 고정 500km 한계로는
+ * 사전 검증된 정상 경로마저 거부돼 회피가 영구 차단된다(현재 경로 유지). 따라서
+ * 원본 최장 구간의 1.5배(최소 600km)를 넘는 "새로 생긴 폭주 구간"만 거부한다.
+ *
+ * @param {Array} wps         - 검사 대상(병합 결과) 웨이포인트
+ * @param {Array} [originalWps] - 사전 검증된 원본 항로(적응 기준). 없으면 고정 한계 사용.
+ */
+function isWaypointListSane(wps, originalWps) {
   if (!Array.isArray(wps) || wps.length < 2) return false;
-  const MAX_SEGMENT_KM = 500;
+  const ABS_FLOOR_KM = 600;          // 짧은 항로용 하한
+  const baseMax = maxSegmentKm(originalWps); // 원본 항로의 정상 최장 구간
+  const limit = Math.max(ABS_FLOOR_KM, baseMax * 1.5);
   for (let i = 0; i < wps.length; i++) {
     const w = wps[i];
     if (!w || !Number.isFinite(w.lon) || !Number.isFinite(w.lat)) return false;
     if (w.lat < -90 || w.lat > 90 || w.lon < -180 || w.lon > 180) return false;
     if (i > 0) {
       const d = approxDistKm(wps[i - 1].lat, wps[i - 1].lon, w.lat, w.lon);
-      if (d > MAX_SEGMENT_KM) return false;
+      if (d > limit) return false;
     }
   }
   return true;
@@ -182,46 +224,14 @@ export function createRLAvoidanceController(options) {
       let newWaypoints = null;
       let newProgress = progress;
 
-      // 육지 위협 + 전역 마스크 → 전역 A* 해상 우회 (RL은 빙산 전용이라 육지엔 부적합)
-      if (threatType === 'land' && isGlobalLandMaskReady()) {
-        const margin = 3;
-        const insertStart = Math.max(0, currentSeg);
-        const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
-        const sWp = wps[insertStart];
-        const eWp = wps[insertEnd];
-        const detour = findWaterDetour(
-          { lon: sWp.lon, lat: sWp.lat },
-          { lon: eWp.lon, lat: eWp.lat },
-        );
-        if (detour && detour.length > 0) {
-          method = 'GlobalA*';
-          const detourWps = detour.map((p) => ({ lon: p.lon, lat: p.lat, label: '육지 회피' }));
-          // 스무딩 없이 스플라이스 — 스플라인이 육지로 휘어 무교차 보장이 깨지는 것 방지.
-          const spliced = [
-            ...wps.slice(0, insertStart + 1),
-            ...detourWps,
-            ...wps.slice(insertEnd),
-          ];
-          // 진행도 재매핑(선박 위치 점프 방지)
-          const oldTimings = buildTimings(wps);
-          const newTimings = buildTimings(spliced);
-          const curPos = routePos(progress, oldTimings, wps);
-          let bestT = progress, bestD = Infinity;
-          for (const tp of newTimings) {
-            const d = approxDistKm(curPos.lat, curPos.lon, tp.lat, tp.lon);
-            if (d < bestD) { bestD = d; bestT = tp.t; }
-          }
-          newWaypoints = spliced;
-          newProgress = bestT;
-        }
-      }
-
-      if (!newWaypoints) {
       const iceData = getIceData();
       const weather = getWeather() || { visibility_km: 10, wave_height_m: 1 };
       const iceClass = getIceClass() || 'PC5';
 
-      // 1차: RL 추론 시도
+      // ── 1차: RL 추론 (빙산 + 육지 공통) ──
+      // RL 모델은 학습 시 빙산과 육지(landmask)를 모두 회피하도록 훈련됨.
+      // 백엔드 추론 롤아웃이 학습된 육지 경계를 내부적으로 회피하므로, 육지 위협도
+      // RL 을 1차로 사용한다(요청 빙산이 비어 있어도 롤아웃이 육지를 피해 경로를 투영).
       const rlResult = await rlInfer(
         {
           lon: ship.lon,
@@ -247,7 +257,10 @@ export function createRLAvoidanceController(options) {
         !rlResult.fallback &&
         rlResult.confidence >= MIN_RL_CONFIDENCE &&
         rlResult.projected_path?.length > 0 &&
-        isProjectedPathSane(rlResult.projected_path, ship)
+        isProjectedPathSane(rlResult.projected_path, ship) &&
+        // 육지 위협이면 RL 투영 경로가 정밀 전역 마스크 기준으로도 육지를 비껴가야 채택.
+        // (RL 학습 육지는 거친 박스라 한국 등 미포함 영역을 통과할 수 있어 정밀 재검증)
+        (threatType !== 'land' || !rlProjectedHitsLand(rlResult.projected_path))
       ) {
         // RL 성공 — 예측 경로를 웨이포인트로 변환
         method = 'RL';
@@ -268,45 +281,79 @@ export function createRLAvoidanceController(options) {
         );
         newWaypoints = merged.newWaypoints;
         newProgress = merged.newProgress;
-      } else {
-        // 2차: A* 폴백
+      }
+
+      // ── 2차: 위협 유형별 A* 폴백 (RL 실패/거부 시) ──
+      // 육지: 정밀 전역 마스크 기반 A* 해상 우회 (RL 거친 박스가 못 잡는 연안 보강)
+      if (!newWaypoints && threatType === 'land' && isGlobalLandMaskReady()) {
+        method = 'GlobalA*';
+        console.warn('[RL] 육지 폴백 → GlobalA*', rlResult.error || `confidence=${rlResult.confidence}`);
+        const margin = 3;
+        const insertStart = Math.max(0, currentSeg);
+        const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
+        const sWp = wps[insertStart];
+        const eWp = wps[insertEnd];
+        const detour = findWaterDetour(
+          { lon: sWp.lon, lat: sWp.lat },
+          { lon: eWp.lon, lat: eWp.lat },
+        );
+        if (detour && detour.length > 0) {
+          const detourWps = detour.map((p) => ({ lon: p.lon, lat: p.lat, label: '육지 회피' }));
+          // 스무딩 없이 스플라이스 — 스플라인이 육지로 휘어 무교차 보장이 깨지는 것 방지.
+          const spliced = [
+            ...wps.slice(0, insertStart + 1),
+            ...detourWps,
+            ...wps.slice(insertEnd),
+          ];
+          // 진행도 재매핑(선박 위치 점프 방지)
+          const oldTimings = buildTimings(wps);
+          const newTimings = buildTimings(spliced);
+          const curPos = routePos(progress, oldTimings, wps);
+          let bestT = progress, bestD = Infinity;
+          for (const tp of newTimings) {
+            const d = approxDistKm(curPos.lat, curPos.lon, tp.lat, tp.lon);
+            if (d < bestD) { bestD = d; bestT = tp.t; }
+          }
+          newWaypoints = spliced;
+          newProgress = bestT;
+        }
+      }
+
+      // 빙산: 해빙 격자 기반 A* 우회
+      if (!newWaypoints && threatType !== 'land' && iceData) {
         method = 'A*';
-        console.warn('[RL] 폴백 → A*', rlResult.error || `confidence=${rlResult.confidence}`);
+        console.warn('[RL] 빙산 폴백 → A*', rlResult.error || `confidence=${rlResult.confidence}`);
+        const { rerouted, newWaypoints: astarWps } = await rerouteAroundIceberg(
+          wps, dangerIdx, iceData, nearbyBergs,
+        );
+        if (rerouted) {
+          // A* 결과도 스무딩 적용
+          const margin = 5;
+          const insertStart = Math.max(0, dangerIdx - margin);
+          const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
 
-        if (iceData) {
-          const { rerouted, newWaypoints: astarWps } = await rerouteAroundIceberg(
-            wps, dangerIdx, iceData, nearbyBergs,
+          // A* 결과에서 새로 삽입된 구간 추출
+          const beforeLen = insertStart;
+          const afterLen = wps.length - insertEnd - 1;
+          const detourPortion = astarWps.slice(
+            beforeLen,
+            astarWps.length - afterLen,
           );
-          if (rerouted) {
-            // A* 결과도 스무딩 적용
-            const margin = 5;
-            const insertStart = Math.max(0, dangerIdx - margin);
-            const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
 
-            // A* 결과에서 새로 삽입된 구간 추출
-            const beforeLen = insertStart;
-            const afterLen = wps.length - insertEnd - 1;
-            const detourPortion = astarWps.slice(
-              beforeLen,
-              astarWps.length - afterLen,
+          if (detourPortion.length > 2) {
+            const smoothed = mergeDetourSmooth(
+              wps, detourPortion, progress, insertStart, insertEnd,
             );
-
-            if (detourPortion.length > 2) {
-              const smoothed = mergeDetourSmooth(
-                wps, detourPortion, progress, insertStart, insertEnd,
-              );
-              newWaypoints = smoothed.newWaypoints;
-              newProgress = smoothed.newProgress;
-            } else {
-              newWaypoints = astarWps;
-            }
+            newWaypoints = smoothed.newWaypoints;
+            newProgress = smoothed.newProgress;
+          } else {
+            newWaypoints = astarWps;
           }
         }
       }
-      } // end if(!newWaypoints) — 빙산 RL/A* 경로
 
       // 병합 결과 정합성 검사 — 특이점 폭주 경로면 적용하지 않음(현재 경로 유지)
-      if (newWaypoints && !isWaypointListSane(newWaypoints)) {
+      if (newWaypoints && !isWaypointListSane(newWaypoints, wps)) {
         console.warn('[RL Controller] 비정상 우회 경로 감지 — 적용 거부(현재 경로 유지)');
         newWaypoints = null;
       }

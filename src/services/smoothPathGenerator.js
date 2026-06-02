@@ -15,7 +15,11 @@ const DEG_TO_KM = 111.32;
  */
 function approxDistKm(lat1, lon1, lat2, lon2) {
   const dLat = (lat2 - lat1) * DEG_TO_KM;
-  const dLon = (lon2 - lon1) * DEG_TO_KM * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+  // 날짜변경선(±180°) 교차 정규화 — 경도차를 [-180,180]로 보정해 거리 폭주 방지
+  let dLonDeg = lon2 - lon1;
+  if (dLonDeg > 180) dLonDeg -= 360;
+  else if (dLonDeg < -180) dLonDeg += 360;
+  const dLon = dLonDeg * DEG_TO_KM * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
   return Math.sqrt(dLat * dLat + dLon * dLon);
 }
 

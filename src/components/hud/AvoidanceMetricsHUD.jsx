@@ -35,7 +35,15 @@ function confidenceColor(c) {
 export function AvoidanceMetricsPanel({ metrics }) {
   if (!metrics || metrics.threats === 0) return null;
 
-  const { rlSuccessRate, fallbackRate, avgConfidence, applied, threats, kept, byMethod = {} } = metrics;
+  const {
+    rlSuccessRate,
+    fallbackRate,
+    avgConfidence,
+    applied,
+    threats,
+    kept,
+    byMethod = {},
+  } = metrics;
 
   return (
     <div
@@ -51,29 +59,63 @@ export function AvoidanceMetricsPanel({ metrics }) {
         fontFamily: "'Segoe UI', system-ui, sans-serif",
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 }}>
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: '#e2e8f0',
+          marginTop: 8,
+        }}
+      >
         AI 자율 회피 지표
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        <Row label="RL 성공률" value={pct(rlSuccessRate)} color={rlRateColor(rlSuccessRate)} />
-        <Row label="A* 폴백률" value={pct(fallbackRate)} color={fallbackRate > 0.5 ? '#f87171' : '#94a3b8'} />
-        <Row label="평균 신뢰도" value={(avgConfidence || 0).toFixed(2)} color={confidenceColor(avgConfidence)} />
-        <Row label="회피 적용 / 위협" value={`${applied} / ${threats}`} color="#93c5fd" />
+        <Row
+          label="RL 성공률"
+          value={pct(rlSuccessRate)}
+          color={rlRateColor(rlSuccessRate)}
+        />
+        <Row
+          label="A* 폴백률"
+          value={pct(fallbackRate)}
+          color={fallbackRate > 0.5 ? '#f87171' : '#94a3b8'}
+        />
+        <Row
+          label="평균 신뢰도"
+          value={(avgConfidence || 0).toFixed(2)}
+          color={confidenceColor(avgConfidence)}
+        />
+        <Row
+          label="회피 적용 / 위협"
+          value={`${applied} / ${threats}`}
+          color="#93c5fd"
+        />
         <Row label="경로 유지" value={String(kept)} color="#64748b" />
       </div>
 
       {Object.keys(byMethod).length > 0 && (
-        <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ fontSize: 9, color: '#64748b', marginBottom: 3 }}>방법별 적용</div>
+        <div
+          style={{
+            marginTop: 8,
+            paddingTop: 6,
+            borderTop: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          <div style={{ fontSize: 9, color: '#64748b', marginBottom: 3 }}>
+            방법별 적용
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {Object.entries(byMethod).map(([m, n]) => (
               <span
                 key={m}
                 style={{
-                  fontSize: 9, color: '#c4b5fd',
-                  background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.4)',
-                  borderRadius: 3, padding: '1px 5px',
+                  fontSize: 9,
+                  color: '#c4b5fd',
+                  background: 'rgba(124,58,237,0.15)',
+                  border: '1px solid rgba(124,58,237,0.4)',
+                  borderRadius: 3,
+                  padding: '1px 5px',
                 }}
               >
                 {m} {n}
@@ -88,9 +130,22 @@ export function AvoidanceMetricsPanel({ metrics }) {
 
 function Row({ label, value, color }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}
+    >
       <span style={{ fontSize: 10, color: '#64748b' }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
         {value}
       </span>
     </div>
