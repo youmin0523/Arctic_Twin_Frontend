@@ -49,6 +49,7 @@ import {
   routePos,
   routeHeading,
   calculateRouteDistanceKM,
+  estimateVoyageDays,
   getSeaState,
 } from './services/shipSimulator';
 
@@ -512,8 +513,8 @@ function AppInner() {
       const distKm = calculateRouteDistanceKM(activeWaypoints);
       // //! [Original Code] 하드코딩된 총 초 수
       //      const totalSec = getTotalSeconds(state.currentRouteKey);
-      // //* [Modified Code] 실측 거리 기반 동적 초 산출 (15노트 기준)
-      const dynamicDays = Math.max(1, Math.round(distKm / (15 * 1.852 * 24)));
+      // //* [Modified Code] 실측 거리 기반 동적 초 산출 (검증된 순수 함수로 통합)
+      const dynamicDays = estimateVoyageDays(activeWaypoints);
       const totalSec = dynamicDays * 86400;
       // 선박 물리 속도는 시뮬 배율과 무관 (배율은 시간 압축일 뿐)
       const speedKmH = distKm / (totalSec / 3600);
@@ -822,8 +823,7 @@ function AppInner() {
         //        const routeTotalSec = getTotalSeconds(routeKey);
         // //* [Modified Code] 동적 시간 계산
         const wps = activeWpRef.current;
-        const distKm = calculateRouteDistanceKM(wps);
-        const dynamicDays = Math.max(1, Math.round(distKm / (15 * 1.852 * 24)));
+        const dynamicDays = estimateVoyageDays(wps);
         const routeTotalSec = dynamicDays * 86400;
         const progress = Math.min(simElapsedRef.current / routeTotalSec, 1);
 

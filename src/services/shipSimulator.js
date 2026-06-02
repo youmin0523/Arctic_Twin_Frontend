@@ -8,6 +8,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { BASE_GM } from '../data/vesselPresets.js';
+import { collisionOutcome } from './collisionModel.js';
 
 // ─── Route geometry helpers ───────────────────────────────────
 
@@ -53,6 +54,35 @@ export function calculateRouteDistanceKM(wps) {
     dist += greatCircleDist(wps[i - 1], wps[i]);
   }
   return dist * 6371.0; // 지구 반지름 약 6371km
+}
+
+// ─── Voyage time estimation ───────────────────────────────────
+
+// 기준 순항 속도 (노트). App.jsx 의 동적 일수 계산에서 하드코딩되어 있던 값을
+// 단일 출처로 통합 — 거리 기반 항해 시간 산출에 사용.
+export const CRUISE_SPEED_KNOTS = 15;
+const KM_PER_NM = 1.852; // 1 해리 = 1.852 km
+
+/**
+ * 항로 거리와 순항 속도로 예상 항해 일수를 산출(최소 1일).
+ * 기존 App.jsx 의 `Math.max(1, Math.round(distKm / (15 * 1.852 * 24)))` 를 대체.
+ *
+ * @param {Array}  wps         - 웨이포인트 배열
+ * @param {number} speedKnots  - 순항 속도(노트), 기본 15
+ * @returns {number} 정수 일수 (>= 1)
+ */
+export function estimateVoyageDays(wps, speedKnots = CRUISE_SPEED_KNOTS) {
+  const distKm = calculateRouteDistanceKM(wps);
+  const kmPerDay = speedKnots * KM_PER_NM * 24;
+  if (!(kmPerDay > 0)) return 1;
+  return Math.max(1, Math.round(distKm / kmPerDay));
+}
+
+/**
+ * 예상 항해 시간(초). 시뮬레이션 클럭의 총 길이로 사용.
+ */
+export function estimateVoyageSeconds(wps, speedKnots = CRUISE_SPEED_KNOTS) {
+  return estimateVoyageDays(wps, speedKnots) * 86400;
 }
 
 // ─── Spherical interpolation ──────────────────────────────────
@@ -168,6 +198,27 @@ export function getSeaState(lat) {
   return { Hs: 1.8, Tp: 9, label: '연안 해역' };
 }
 
+/**
+ * 실측 파고가 있으면 그것을, 없으면 위도 기반 합성 sea-state 를 반환.
+ * 현재 ThreeOverlay/App 에 흩어져 있던 "실측 우선, 위도 폴백" 우선순위를
+ * 단일·검증 가능한 함수로 형식화한다.
+ *
+ * @param {number} lat       - 위도
+ * @param {Object} realWave  - { Hs, Tp } 실측 파고(선택). 유효하지 않으면 무시.
+ * @returns {Object} { Hs, Tp, label, source: 'real' | 'latitude' }
+ */
+export function resolveSeaState(lat, realWave) {
+  if (
+    realWave &&
+    Number.isFinite(realWave.Hs) &&
+    realWave.Hs >= 0
+  ) {
+    const Tp = Number.isFinite(realWave.Tp) && realWave.Tp > 0 ? realWave.Tp : 8;
+    return { Hs: realWave.Hs, Tp, label: '실측 파고', source: 'real' };
+  }
+  return { ...getSeaState(lat), source: 'latitude' };
+}
+
 // ─── Ship motion (roll / pitch / heave) ───────────────────────
 
 /**
@@ -181,7 +232,8 @@ export function getSeaState(lat) {
  *   screenShakeT, fovImpactBoost, shipGM, omegaR, omegaP
  */
 export function updateShipMotion(dt, lat, state) {
-  const st = getSeaState(lat);
+  // 실측 파고(state.realWave)가 주입돼 있으면 우선 사용, 없으면 위도 폴백.
+  const st = resolveSeaState(lat, state.realWave);
   state.motionWavePhase += dt * ((2 * Math.PI) / st.Tp);
   const zetaR = 0.05,
     zetaP = 0.04;
@@ -300,11 +352,30 @@ export function updateShipPhysics(dt, state) {
       ice.grp.position.set(ice.cx, 0, ice.cz);
       if (!state.impactActive) {
         state.impactActive = true;
-        state.impactRoll = (Math.random() > 0.5 ? 1 : -1) * 0.26;
-        state.impactPitch = -0.14;
-        state.screenShakeT = 0.5;
-        state.fovImpactBoost = 15;
-        state.shipSpeed *= 1 - state.iceDamageMult * 0.3 * state.inertiaFactor;
+        // 충돌 결과 물리 모델: 빙급·빙산 규모·선속 기반 severity 산출
+        // (기존 고정계수 `iceDamageMult*0.3` 대체 — 손상·감속·침로 편향 일관 반영)
+        const approxKnots = state.maxSpeedBase > 0
+          ? Math.min(20, (Math.abs(state.shipSpeed) / state.maxSpeedBase) * 18)
+          : Math.abs(state.shipSpeed);
+        // 충돌 입사각: 선속 방향 vs 충돌 법선의 정렬도(|dot|~1 정면, ~0 빗겨맞음)
+        const dot = Math.sin(state.shipHeading) * nx - Math.cos(state.shipHeading) * nz;
+        const outcome = collisionOutcome({
+          speedKnots: approxKnots,
+          icebergLengthM: (ice.r || 20) * 100,
+          iceClass: state.iceClass,
+          glancing: Math.abs(dot) < 0.5,
+        });
+        state.lastCollision = outcome;
+        state.hullDamage = Math.min(1, (state.hullDamage || 0) + outcome.damageIncrement);
+        // 결과를 모션/감속/침로에 반영 (severity 스케일)
+        state.impactRoll = (Math.random() > 0.5 ? 1 : -1) * (0.12 + 0.2 * outcome.severity);
+        state.impactPitch = -(0.06 + 0.12 * outcome.severity);
+        state.screenShakeT = 0.3 + 0.4 * outcome.severity;
+        state.fovImpactBoost = 8 + 14 * outcome.severity;
+        state.shipSpeed *= 1 - outcome.speedLossFactor * (state.inertiaFactor ?? 1);
+        // 침로 편향(yaw) — 기존엔 yaw 고정이었음(발표자료 #4)
+        state.shipHeading +=
+          (dot >= 0 ? 1 : -1) * (outcome.headingDeflectionDeg * Math.PI) / 180;
       }
     }
   }
