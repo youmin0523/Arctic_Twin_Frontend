@@ -123,7 +123,7 @@ export default function AraonLiveMarker({ cesiumRef, visible, displayPos }) {
 
       entityRef.current = viewer.entities.add({
         id: 'live-ib-araon',
-        position: Cesium.Cartesian3.fromDegrees(initLon, initLat, 0),
+        position: Cesium.Cartesian3.fromDegrees(initLon, initLat, 2000), // //* 반대 반구 비침 방지 부양
         billboard: {
           image: canvasRef.current,
           // 쇄빙선이 본선(54x108)보다 확실히 더 크게 — 약 50% 증대
@@ -135,7 +135,8 @@ export default function AraonLiveMarker({ cesiumRef, visible, displayPos }) {
           color: Cesium.Color.fromCssColorString(
             STATUS_COLOR[initStatus] || '#9ca3af',
           ),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          // //* 반대 반구 아라온이 비치지 않도록 유한 깊이거리 (근접 줌만 비활성)
+          disableDepthTestDistance: 50000,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
           // 본선 스케일 곡선과 동일하게 맞춰 줌 변화 시에도 비율 유지
@@ -188,7 +189,7 @@ export default function AraonLiveMarker({ cesiumRef, visible, displayPos }) {
     const status = displayPos?.status || 'idle';
     const heading = displayPos?.heading || 0;
     try {
-      entityRef.current.position = Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+      entityRef.current.position = Cesium.Cartesian3.fromDegrees(lon, lat, 2000); // //* 생성 시와 동일 고도
       entityRef.current.billboard.color = Cesium.Color.fromCssColorString(
         STATUS_COLOR[status] || '#9ca3af',
       );
