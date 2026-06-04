@@ -20,6 +20,26 @@ function approxDistKm(lat1, lon1, lat2, lon2) {
 }
 
 /**
+ * 점(berg)에서 선분(wpA→wpB)까지의 최단거리(km) — 평면(km) 투영 근사.
+ * sparse 웨이포인트 사이 경로 옆을 지나는 빙산을 잡기 위해 사용.
+ */
+function pointToSegmentKm(berg, a, b) {
+  const cosLat = Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+  // km 평면 좌표 (a 기준)
+  const ax = 0, ay = 0;
+  const bx = (b.lon - a.lon) * DEG_TO_KM * cosLat;
+  const by = (b.lat - a.lat) * DEG_TO_KM;
+  const px = (berg.lon - a.lon) * DEG_TO_KM * cosLat;
+  const py = (berg.lat - a.lat) * DEG_TO_KM;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+/**
  * 전방 경로에서 빙산과의 충돌 위험을 검사.
  *
  * @param {Array} waypoints - 현재 경로 웨이포인트 [{lon, lat, label}, ...]
@@ -43,12 +63,39 @@ export function checkRouteAhead(
   const startIdx = Math.max(0, currentSegIdx);
   const endIdx = Math.min(waypoints.length, startIdx + lookAheadCount);
 
-  for (let i = startIdx; i < endIdx; i++) {
-    const wp = waypoints[i];
+  // //* [Modified Code] 기존엔 웨이포인트 "점"만 빙산과 비교해, sparse 웨이포인트
+  //   사이 경로 옆을 지나는 빙산(빙하 사이 통과)을 놓쳤다 → 경로 "선분"과 빙산의
+  //   수직거리로 검사해 선제적으로 감지·우회한다.
+  let best = { blocked: false, dangerIdx: -1, dangerBerg: null, dist: Infinity };
+  for (let i = startIdx; i < endIdx - 1; i++) {
+    const a = waypoints[i];
+    const b = waypoints[i + 1];
+    if (!a || !b) continue;
     for (const berg of icebergPositions) {
-      const dist = approxDistKm(wp.lat, wp.lon, berg.lat, berg.lon);
-      if (dist < safetyRadiusKm) {
-        return { blocked: true, dangerIdx: i, dangerBerg: berg };
+      const dist = pointToSegmentKm(berg, a, b);
+      if (dist < safetyRadiusKm && dist < best.dist) {
+        // 위험 구간의 더 가까운 쪽 웨이포인트를 dangerIdx 로
+        const dA = approxDistKm(a.lat, a.lon, berg.lat, berg.lon);
+        const dB = approxDistKm(b.lat, b.lon, berg.lat, berg.lon);
+        best = {
+          blocked: true,
+          dangerIdx: dA <= dB ? i : i + 1,
+          dangerBerg: berg,
+          dist,
+        };
+      }
+    }
+  }
+  if (best.blocked) {
+    return { blocked: true, dangerIdx: best.dangerIdx, dangerBerg: best.dangerBerg };
+  }
+
+  // 마지막 웨이포인트(선분 없음) 단독 점검 — 끝점 근처 빙산
+  const last = waypoints[endIdx - 1];
+  if (last) {
+    for (const berg of icebergPositions) {
+      if (approxDistKm(last.lat, last.lon, berg.lat, berg.lon) < safetyRadiusKm) {
+        return { blocked: true, dangerIdx: endIdx - 1, dangerBerg: berg };
       }
     }
   }
