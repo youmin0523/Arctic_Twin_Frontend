@@ -125,8 +125,20 @@ function AppInner() {
   // VoyageInfoPanel / VoyageHUD 표시 여부 (X 버튼으로 닫기/다시 열기)
   const [infoPanelVisible, setInfoPanelVisible] = useState(true);
   const [voyageHudVisible, setVoyageHudVisible] = useState(true);
-  // 모드 전환 시 패널 자동으로 다시 열기
+  // 모드 전환 시 패널 자동으로 다시 열기.
+  // 단, 모바일/가로폰(드로어 모드)에서는 최초 진입 시 정보 패널을 접어
+  // 3D 지도를 먼저 보여준다 (좁은 화면을 패널이 가리는 문제 방지).
+  const appModeFirstRunRef = useRef(true);
   useEffect(() => {
+    const isDrawer =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(max-width: 640px), (max-height: 500px)').matches;
+    if (appModeFirstRunRef.current) {
+      appModeFirstRunRef.current = false;
+      setInfoPanelVisible(!isDrawer);
+      setVoyageHudVisible(!isDrawer);
+      return;
+    }
     setInfoPanelVisible(true);
     setVoyageHudVisible(true);
   }, [appMode]);
