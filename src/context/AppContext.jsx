@@ -248,12 +248,19 @@ function reducer(state, action) {
       return { ...state, timelineDay: action.payload };
 
     case 'RESET':
+      // //* [Modified Code] 생성경로·편집경로·선박제원을 유지해야 리셋 후에도
+      //   "선택한 출발항(예: 상하이)" 기준 항로/선박으로 복귀한다. (기존엔
+      //   generatedWaypoints 초기화 → dep/arr 미변경이라 재생성 안 돼 기본
+      //   ROUTES.NSR(부산)로 폴백되던 버그)
       return {
         ...initialState,
         departurePort: state.departurePort,
         arrivalPort: state.arrivalPort,
         currentRouteKey: state.currentRouteKey,
         designRouteKey: state.designRouteKey,
+        generatedWaypoints: state.generatedWaypoints,
+        editedRoutes: state.editedRoutes,
+        shipSpecs: state.shipSpecs,
       };
 
     default:

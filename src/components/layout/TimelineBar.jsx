@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import './TimelineBar.css';
 
 const ROUTE_LABELS = {
@@ -17,17 +17,9 @@ const ROUTE_DAYS = {
   CAPE: 30,
 };
 
-// //! [Original Code]
-// export default function TimelineBar({
-//   simProgress,
-//   timelineDay,
-//   onTimelineChange,
-//   currentRouteKey,
-//   departureName,
-//   arrivalName,
-// }) {
-//   const totalDays = ROUTE_DAYS[currentRouteKey] || 14;
-// //* [Modified Code] 상위 컴포넌트에서 전달받은 동적 실제 totalDays 적용
+// //* [Modified Code] 기존 opacity:0 네이티브 <input range>(썸 inset 매핑)와
+//   별도 시각 커서(simProgress 전체폭 %)가 어긋나 "끈 만큼 안 따라오는" 문제가
+//   있었다 → 트랙에 직접 포인터 드래그(정확히 커서 = 포인터 위치, 1:1)로 교체.
 export default function TimelineBar({
   simProgress,
   timelineDay,
@@ -39,25 +31,57 @@ export default function TimelineBar({
 }) {
   const totalDays = propTotalDays || ROUTE_DAYS[currentRouteKey] || 14;
   const routeLabel = ROUTE_LABELS[currentRouteKey] || '기타항로';
-  const pct = Math.min(100, (simProgress || 0) * 100);
+  const pct = Math.min(100, Math.max(0, (simProgress || 0) * 100));
   const depName = departureName || '부산';
   const arrName = arrivalName || '로테르담';
+
+  const trackRef = useRef(null);
+  const draggingRef = useRef(false);
+
+  const updateFromClientX = (clientX) => {
+    const el = trackRef.current;
+    if (!el || typeof onTimelineChange !== 'function') return;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    onTimelineChange(ratio * totalDays);
+  };
+
+  const handleDown = (e) => {
+    draggingRef.current = true;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+    updateFromClientX(e.clientX);
+  };
+  const handleMove = (e) => {
+    if (draggingRef.current) updateFromClientX(e.clientX);
+  };
+  const handleUp = (e) => {
+    draggingRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+  };
 
   return (
     <div className="timeline-bar">
       <span className="timeline-bar__port">{depName}</span>
-      <div className="timeline-bar__track">
+      <div
+        className="timeline-bar__track"
+        ref={trackRef}
+        onPointerDown={handleDown}
+        onPointerMove={handleMove}
+        onPointerUp={handleUp}
+        onPointerCancel={handleUp}
+      >
+        <div className="timeline-bar__rail" />
         <div className="timeline-bar__fill" style={{ width: pct + '%' }} />
         <div className="timeline-bar__cursor" style={{ left: pct + '%' }} />
-        <input
-          type="range"
-          className="timeline-bar__slider"
-          min="0"
-          max={totalDays}
-          step="0.1"
-          value={timelineDay}
-          onChange={(e) => onTimelineChange(e.target.value)}
-        />
       </div>
       <span className="timeline-bar__port">{arrName}</span>
       <span className="timeline-bar__day">

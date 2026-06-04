@@ -1500,7 +1500,20 @@ function AppInner() {
   const handleReset = useCallback(() => {
     simElapsedRef.current = 0;
     dispatch({ type: 'RESET' });
-  }, [dispatch]);
+    // //* [Modified Code] 선박을 "선택한 출발항"(=활성 항로의 첫 웨이포인트)으로 복귀.
+    //   기존엔 RESET 이 shipState 를 초기값(부산)으로 되돌려, 상하이 출발인데도
+    //   부산으로 리셋되던 문제.
+    const wp0 =
+      (activeWpRef.current && activeWpRef.current[0]) ||
+      PORTS[state.departurePort] ||
+      PORTS.BUSAN;
+    if (wp0 && typeof wp0.lat === 'number') {
+      dispatch({
+        type: 'SET_SHIP_STATE',
+        payload: { lat: wp0.lat, lon: wp0.lon, heading: 0 },
+      });
+    }
+  }, [dispatch, state.departurePort]);
 
   // 카메라 모드
   const handleModeChange = useCallback(
