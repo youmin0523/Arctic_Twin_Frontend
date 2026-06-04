@@ -1762,7 +1762,23 @@ function AppInner() {
   const handlePresetLoad = useCallback(
     (presetKey) => {
       const preset = SHIP_PRESETS[presetKey];
-      if (preset) dispatch({ type: 'SET_SHIP_SPECS', payload: preset });
+      if (!preset) return;
+      // //* [Modified Code] SHIP_PRESETS 는 len/disp 키, state.shipSpecs 는
+      //   length/displacement 키를 쓴다. 그대로 spread 하면 length/displacement
+      //   가 안 바뀌어(죽은 len/disp 만 추가) 제원 필드·선박 빌보드 크기가
+      //   선종을 따라가지 않았다 → 스키마에 맞게 매핑해서 디스패치.
+      dispatch({
+        type: 'SET_SHIP_SPECS',
+        payload: {
+          type: preset.type,
+          displacement: preset.disp,
+          length: preset.len,
+          width: preset.width,
+          gm: preset.gm,
+          iceClass: preset.iceClass,
+          draft: preset.draft,
+        },
+      });
     },
     [dispatch],
   );

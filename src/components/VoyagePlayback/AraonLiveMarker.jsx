@@ -11,6 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import * as Cesium from 'cesium';
+import { shipBillboardSize, shipScaleByDistance } from '../../services/shipScale';
 
 // Wrangel Island 사전배치 좌표 (backend models.py 와 동일)
 const ARAON_HOME = { lat: 71.0, lon: 179.5 };
@@ -126,9 +127,10 @@ export default function AraonLiveMarker({ cesiumRef, visible, displayPos }) {
         position: Cesium.Cartesian3.fromDegrees(initLon, initLat, 2000), // //* 반대 반구 비침 방지 부양
         billboard: {
           image: canvasRef.current,
-          // 쇄빙선이 본선(54x108)보다 확실히 더 크게 — 약 50% 증대
-          width: 80,
-          height: 160,
+          // //* [Modified Code] 실제 LOA 110m 비례 (shipScale.js). 종전 80x160 은
+          //   실제론 본선(225m+)보다 작은 아라온을 더 크게 그려 비율이 반대였고,
+          //   줌 아웃 시 과도하게 커 보였다 → 실측 비례로 교정.
+          ...shipBillboardSize(undefined, 'araon'),
           // 본선과 동일 규약: alignedAxis=UNIT_Z, rotation=-toRadians(heading)
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
           rotation: initRot,
@@ -139,11 +141,8 @@ export default function AraonLiveMarker({ cesiumRef, visible, displayPos }) {
           disableDepthTestDistance: 50000,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-          // 본선 스케일 곡선과 동일하게 맞춰 줌 변화 시에도 비율 유지
-          scaleByDistance: new Cesium.NearFarScalar(
-            5000, 1.8,
-            500000, 0.6,
-          ),
+          // 본선과 동일한 거리 스케일 곡선 (shipScale.js)
+          scaleByDistance: shipScaleByDistance(),
         },
         label: {
           text: '아라온',

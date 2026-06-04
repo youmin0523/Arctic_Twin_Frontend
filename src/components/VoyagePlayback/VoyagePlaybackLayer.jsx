@@ -14,6 +14,7 @@ import {
   sampleIcebreakersAt,
   ICEBREAKER_META,
 } from '../../services/voyageTrace';
+import { shipBillboardSize, shipScaleByDistance } from '../../services/shipScale';
 
 // RIO 색상 스케일 (본선 tint)
 function rioColor(rio) {
@@ -179,9 +180,9 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
         ),
         billboard: {
           image: ibCanvasRef.current,
-          // 본선(54x108)보다 확실히 크게
-          width: 80,
-          height: 160,
+          // //* [Modified Code] 아라온 실제 LOA 110m 비례 (shipScale.js).
+          //   종전 80x160(본선보다 크게)은 실제 비율과 반대였고 줌 아웃 시 과대.
+          ...shipBillboardSize(undefined, 'icebreaker'),
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
           rotation: 0,   // 첫 프레임은 heading 미정 — 다음 tick 부터 갱신
           color: ibStatusColor(ib.status),
@@ -189,10 +190,7 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
           disableDepthTestDistance: 50000,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-          scaleByDistance: new Cesium.NearFarScalar(
-            5000, 1.8,
-            500000, 0.6,
-          ),
+          scaleByDistance: shipScaleByDistance(),
         },
         label: {
           text: meta.name_ko,
