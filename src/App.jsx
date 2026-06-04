@@ -733,27 +733,19 @@ function AppInner() {
     appModeRef.current = appMode;
   }, [appMode]);
 
-  const ARAON_ESCORT_LEAD_KM = 25; // 에스코트 시 본선 앞 유지 간격
+  // 아라온은 본선의 항로(폴리라인)를 따라 이동 → 항로가 육지를 피하면
+  // 아라온도 자동으로 육지를 피한다(직선 관통 방지).
   const {
     araon: liveAraon,
     callAraon,
     recallAraon,
     getMode: getAraonMode,
   } = useAraonControl({
-    getShipState: useCallback(() => shipStateRef.current, []),
-    getLeadPoint: useCallback(() => {
-      const wps = activeWpRef.current;
-      const twp = timedWpRef.current;
-      const ship = shipStateRef.current;
-      if (!wps || wps.length < 2 || !twp) return ship;
-      const totalKm = calculateRouteDistanceKM(wps);
-      if (!(totalKm > 0)) return ship;
-      const prog = Math.min(
-        0.999,
-        (simProgressRef.current || 0) + ARAON_ESCORT_LEAD_KM / totalKm,
-      );
-      return routePos(prog, twp, wps);
-    }, []),
+    getShipProgress: useCallback(() => simProgressRef.current, []),
+    getRoute: useCallback(
+      () => ({ waypoints: activeWpRef.current, timed: timedWpRef.current }),
+      [],
+    ),
     getMultiplier: useCallback(() => multiplierRef.current, []),
     getActive: useCallback(() => appModeRef.current === 'live', []),
   });
