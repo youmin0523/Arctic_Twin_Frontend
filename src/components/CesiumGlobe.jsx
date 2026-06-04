@@ -11,6 +11,7 @@ import React, {
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { ROUTES } from '../data/arcticRoutes';
+import { shipBillboardSize, shipScaleByDistance } from '../services/shipScale';
 
 // Cesium ion 토큰 (브라우저 노출용 클라이언트 토큰). Vercel 환경변수
 // VITE_CESIUM_ION_TOKEN 이 있으면 그것을 쓰고, 없으면 기본 토큰으로 폴백.
@@ -423,6 +424,13 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
 
     const iconUrl = createShipIcon(type);
 
+    // //* [Modified Code] 빌보드 크기를 실제 전장(LOA)에 비례 산출 → 선종별 상대
+    //   크기가 실제 비율과 일치. shipSpecs.length(실측 m) 우선, 없으면 type 폴백.
+    const { width: shipW, height: shipH } = shipBillboardSize(
+      shipSpecs.length,
+      type,
+    );
+
     if (!shipEntityRef.current) {
       lastShipType.current = type;
       shipEntityRef.current = viewer.entities.add({
@@ -430,12 +438,12 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
         position,
         billboard: {
           image: iconUrl,
-          // //! [Original Code]
-          //           width: 40,
-          //           height: 80,
-          // //* [Modified Code] 시인성 확보를 위해 크기 약 35% 증대 (40x80 -> 54x108)
-          width: 54,
-          height: 108,
+          // //! [Original Code] 고정 54x108 (선종 무관) → 실제 크기 비율 무시
+          //   width: 54, height: 108,
+          // //* [Modified Code] 실제 LOA 비례 (shipScale.js). 줌 아웃 시 과대 표시
+          //   완화를 위해 거리 스케일도 강화.
+          width: shipW,
+          height: shipH,
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
           rotation: rot,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
@@ -445,7 +453,7 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
           // //* [Modified Code] 20km 이내(근접 줌)만 깊이 테스트 비활성(지형 클리핑 방지),
           //   그 너머는 깊이 테스트 적용 → 반대 반구의 선박은 글로브에 가려짐.
           disableDepthTestDistance: 20000,
-          scaleByDistance: new Cesium.NearFarScalar(5000, 1.8, 500000, 0.6),
+          scaleByDistance: shipScaleByDistance(),
         },
         label: {
           text:
@@ -476,6 +484,9 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
     } else {
       shipEntityRef.current.position = position;
       shipEntityRef.current.billboard.rotation = rot;
+      // //* [Modified Code] 선박 제원 변경 시 빌보드 크기도 실측 LOA 비례로 갱신
+      shipEntityRef.current.billboard.width = shipW;
+      shipEntityRef.current.billboard.height = shipH;
     }
   }, []);
 
