@@ -8,12 +8,12 @@ const LEVEL_COLOR = {
   info: '#93c5fd',
 };
 
-export default function AlertLog({ entries = [] }) {
+export default function AlertLog({ entries = [], maxHeight = 180 }) {
   return (
     <div
       style={{
         width: 230,
-        maxHeight: 200,
+        maxHeight,
         overflowY: 'auto',
         background: 'rgba(8,13,28,0.82)',
         border: '1px solid rgba(56,82,120,0.5)',
@@ -53,6 +53,9 @@ export default function AlertLog({ entries = [] }) {
           >
             <span style={{ color: '#64748b', flexShrink: 0 }}>{e.time}</span>
             <span style={{ color: LEVEL_COLOR[e.level] || '#cbd5e1', lineHeight: 1.35 }}>
+              {e.loc ? (
+                <span style={{ color: '#7dd3fc' }}>[{e.loc}] </span>
+              ) : null}
               {e.msg}
             </span>
           </div>

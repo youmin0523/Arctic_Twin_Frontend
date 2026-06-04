@@ -379,10 +379,25 @@ function AppInner() {
     const time = `${String(d.getHours()).padStart(2, '0')}:${String(
       d.getMinutes(),
     ).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+    // 현재 위치 라벨 — 본선에서 가장 가까운 "명칭 있는" 웨이포인트(예: 동해 중앙)
+    let loc = '';
+    const ship = shipStateRef.current;
+    const wps = activeWpRef.current;
+    if (ship && typeof ship.lat === 'number' && wps && wps.length) {
+      let bestD = Infinity;
+      for (const w of wps) {
+        if (!w || !w.label) continue;
+        const dd = Math.abs(w.lat - ship.lat) + Math.abs(w.lon - ship.lon);
+        if (dd < bestD) {
+          bestD = dd;
+          loc = w.label;
+        }
+      }
+    }
     setNotifLog((prev) => {
-      // 직전과 동일 메시지면 중복 누적 방지
-      if (prev.length && prev[0].msg === msg) return prev;
-      const entry = { id: ++notifSeqRef.current, time, msg, level };
+      // 직전과 동일 메시지+위치면 중복 누적 방지
+      if (prev.length && prev[0].msg === msg && prev[0].loc === loc) return prev;
+      const entry = { id: ++notifSeqRef.current, time, msg, level, loc };
       return [entry, ...prev].slice(0, 80);
     });
   }, []);
@@ -3089,16 +3104,14 @@ function AppInner() {
             avoidance={state.avoidance}
           />
 
-          {/* AI 자율 회피 지표(상단) + 그 아래 누적 알림 로그 */}
+          {/* AI 자율 회피 지표 — 좌상단 (시뮬 중 위협 발생 시에만 표시) */}
           <div
             style={{
               position: 'absolute',
               left: 12,
               top: 60,
+              width: 210,
               zIndex: 280,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
               pointerEvents: 'none',
             }}
           >
@@ -3106,7 +3119,11 @@ function AppInner() {
               getMetrics={() => rlControllerRef.current?.getMetrics()}
               active={state.isSimulating && !state.manualMode}
             />
-            <AlertLog entries={notifLog} />
+          </div>
+          {/* 누적 알림 로그 — 회피 지표 아래 "고정" 위치 (지표 등장에 밀리지 않음).
+              좌하단 FollowMiniMap(bottom:60)과 겹치지 않도록 상단에 배치·높이 제한. */}
+          <div style={{ position: 'absolute', left: 12, top: 278, zIndex: 280 }}>
+            <AlertLog entries={notifLog} maxHeight={170} />
           </div>
 
           {/* 웨이포인트 에디터 (단계 C) — 글로브 위 직접 편집 + 패널 */}
