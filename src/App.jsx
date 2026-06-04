@@ -81,6 +81,7 @@ import {
 import ProximityWarningOverlay from './components/hud/ProximityWarningOverlay';
 import WaypointEditor from './components/WaypointEditor';
 import useVoyagePlayback from './hooks/useVoyagePlayback';
+import useAraonControl, { ARAON_HOME } from './hooks/useAraonControl';
 import VoyagePlaybackLayer from './components/VoyagePlayback/VoyagePlaybackLayer';
 import VoyageHUD from './components/VoyagePlayback/VoyageHUD';
 import VoyageControls from './components/VoyagePlayback/VoyageControls';
@@ -720,6 +721,42 @@ function AppInner() {
   useEffect(() => {
     timedWpRef.current = timedWaypoints;
   }, [timedWaypoints]);
+
+  // ── 아라온(쇄빙선) 독립 운항 에이전트 (Live 모드) ─────────────────
+  // 호출/복귀 버튼 + 선도→에스코트. 항상 최신 본선/항로/배율을 ref 로 주입.
+  const simProgressRef = useRef(0);
+  useEffect(() => {
+    simProgressRef.current = state.simProgress;
+  }, [state.simProgress]);
+  const appModeRef = useRef(appMode);
+  useEffect(() => {
+    appModeRef.current = appMode;
+  }, [appMode]);
+
+  const ARAON_ESCORT_LEAD_KM = 25; // 에스코트 시 본선 앞 유지 간격
+  const {
+    araon: liveAraon,
+    callAraon,
+    recallAraon,
+    getMode: getAraonMode,
+  } = useAraonControl({
+    getShipState: useCallback(() => shipStateRef.current, []),
+    getLeadPoint: useCallback(() => {
+      const wps = activeWpRef.current;
+      const twp = timedWpRef.current;
+      const ship = shipStateRef.current;
+      if (!wps || wps.length < 2 || !twp) return ship;
+      const totalKm = calculateRouteDistanceKM(wps);
+      if (!(totalKm > 0)) return ship;
+      const prog = Math.min(
+        0.999,
+        (simProgressRef.current || 0) + ARAON_ESCORT_LEAD_KM / totalKm,
+      );
+      return routePos(prog, twp, wps);
+    }, []),
+    getMultiplier: useCallback(() => multiplierRef.current, []),
+    getActive: useCallback(() => appModeRef.current === 'live', []),
+  });
 
   // ── 항구/경로 변경 시 동적 경로 생성 ──────────────────────────
   useEffect(() => {
@@ -2203,6 +2240,26 @@ function AppInner() {
     return grid.get(key) ?? 0;
   }, []);
 
+  // ── 아라온 자동 호출(상황 인지) — 결빙수역 진입 시 1회 자동 호출 ────────
+  //   무조건 호출이 아니라 본선이 결빙수역(SIC>0.3, RIO 위험 proxy)에 "진입"하는
+  //   상승 에지에서만 호출. 수동 복귀(recall)는 항상 우선하며, 개방수역으로
+  //   나갔다 다시 진입할 때 재무장(rising edge)된다.
+  const prevSicHighRef = useRef(false);
+  useEffect(() => {
+    if (appMode !== 'live') return;
+    const ARCTIC = ['NSR', 'NWP', 'TSR'];
+    const ship = state.shipState;
+    if (!ARCTIC.includes(state.currentRouteKey) || !ship) {
+      prevSicHighRef.current = false;
+      return;
+    }
+    const high = sampleIceFn(ship.lon, ship.lat) > 0.3;
+    if (high && !prevSicHighRef.current && getAraonMode() === 'idle') {
+      callAraon(); // 결빙수역 진입 인지 → 자동 호출
+    }
+    prevSicHighRef.current = high;
+  }, [state.shipState, state.currentRouteKey, appMode, sampleIceFn, getAraonMode, callAraon]);
+
   // ── Live 모드 아라온 3D 모델 동적 배치 ──────────────────────────────
   // 개방 수역: Wrangel 정박
   // 얼음 농도 > 0.3: 자동 호위 override + 쇄빙 거동
@@ -2779,45 +2836,20 @@ function AppInner() {
         heading: aHdg,
       };
     }
-  } else if (
-    isArcticRoute &&
-    state.shipState &&
-    typeof state.shipState.lat === 'number'
-  ) {
-    const sic = sampleIceFn(state.shipState.lon, state.shipState.lat);
-    if (sic > 0.3) {
-      // 호위 연출: 아라온이 항로 위 본선 앞쪽에서 선도
-      // 항로 길이에 따라 lead 거리 자동 조정 (짧은 구간이면 비례 축소)
-      const totalKm = Math.max(1, calculateRouteDistanceKM(activeWaypoints));
-      const remainKm = totalKm * (1 - state.simProgress);
-      // 기본 100km, 남은 거리의 30% 와 100km 중 작은 값 (마지막 구간에서 도착항 박힘 방지)
-      const leadKm = Math.min(100, Math.max(5, remainKm * 0.3));
-      const aheadProgress = Math.min(
-        0.999,
-        state.simProgress + leadKm / totalKm,
-      );
-      const aheadPos = routePos(aheadProgress, timedWaypoints, activeWaypoints);
-      const aheadHdgRad = routeHeading(aheadProgress, timedWaypoints, activeWaypoints);
-      const aheadHdgDeg = ((aheadHdgRad * 180) / Math.PI + 360) % 360;
+  } else if (!voyageActive) {
+    // Live 모드: 독립 아라온 에이전트(useAraonControl)가 호출/복귀로 자체 운항.
+    // 표시 조건: 호출됨(active/returning) 이거나 북극 항로(대기 마커 노출).
+    if (liveAraon.mode !== 'idle' || isArcticRoute) {
       araonDisplayPos = {
-        lat: aheadPos.lat,
-        lon: aheadPos.lon,
-        status: 'escorting',
-        label: '호위 중',
-        heading: aheadHdgDeg,
-      };
-    } else {
-      // 결빙 수역 아닐 때만 Wrangel 정박
-      araonDisplayPos = {
-        lat: 71.0,
-        lon: 179.5,
-        status: 'idle',
-        label: 'Wrangel 정박',
-        heading: 0,
+        lat: liveAraon.lat,
+        lon: liveAraon.lon,
+        status: liveAraon.status,
+        label: liveAraon.label,
+        heading: liveAraon.heading,
       };
     }
   }
-  // isArcticRoute=false 면 araonDisplayPos=null → AraonLiveMarker 가 entity 미생성/제거
+  // 표시 안 함 → araonDisplayPos=null → AraonLiveMarker 가 entity 미생성/제거
 
   return (
     <div
@@ -3070,6 +3102,15 @@ function AppInner() {
               }}
               sampleIceFn={sampleIceFn}
               araonDisplayPos={araonDisplayPos}
+              araonControl={
+                !voyageActive
+                  ? {
+                      mode: liveAraon.mode,
+                      onCall: callAraon,
+                      onRecall: recallAraon,
+                    }
+                  : null
+              }
             />
           )}
 

@@ -115,6 +115,7 @@ export default function VoyageInfoPanel({
   liveManual, // { manualMode, manualSpeed, manualHeading }
   sampleIceFn,
   araonDisplayPos, // App.jsx 에서 계산된 통합 아라온 위치 (Cesium marker 와 동일)
+  araonControl, // Live 모드 수동 호출/복귀: { mode, onCall, onRecall } | null
   onClose,
 }) {
   // ── Voyage / Live 통합 snapshot — useMemo 우회, 매 렌더마다 직접 계산 ──
@@ -424,13 +425,61 @@ export default function VoyageInfoPanel({
                     color: araon.status === 'escorting' ? '#ef4444' : '#64748b',
                   }}
                 >
-                  {araon.status === 'escorting' ? '본선 호위 중' : 'Wrangel 정박'}
+                  {araonDisplayPos?.label || (araon.status === 'escorting' ? '본선 호위 중' : 'Wrangel 정박')}
                 </div>
               </>
             )}
           </div>
         ) : (
           <div style={{ color: '#64748b' }}>데이터 없음</div>
+        )}
+
+        {/* Live 모드 수동 호출/복귀 컨트롤 */}
+        {araonControl && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <button
+              type="button"
+              onClick={araonControl.onCall}
+              disabled={araonControl.mode === 'active'}
+              style={{
+                flex: 1,
+                padding: '5px 0',
+                borderRadius: 4,
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: araonControl.mode === 'active' ? 'default' : 'pointer',
+                border: '1px solid rgba(239,68,68,0.6)',
+                background:
+                  araonControl.mode === 'active'
+                    ? 'rgba(239,68,68,0.25)'
+                    : 'rgba(239,68,68,0.85)',
+                color: araonControl.mode === 'active' ? '#fca5a5' : '#fff',
+              }}
+            >
+              {araonControl.mode === 'active' ? '호출됨' : '🚨 호출'}
+            </button>
+            <button
+              type="button"
+              onClick={araonControl.onRecall}
+              disabled={araonControl.mode === 'idle'}
+              style={{
+                flex: 1,
+                padding: '5px 0',
+                borderRadius: 4,
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: araonControl.mode === 'idle' ? 'default' : 'pointer',
+                border: '1px solid rgba(96,165,250,0.6)',
+                background:
+                  araonControl.mode === 'idle'
+                    ? 'rgba(96,165,250,0.18)'
+                    : 'rgba(37,99,235,0.85)',
+                color: araonControl.mode === 'idle' ? '#93c5fd' : '#fff',
+              }}
+            >
+              {araonControl.mode === 'returning' ? '복귀 중' : '↩ 복귀'}
+            </button>
+          </div>
         )}
       </section>
 
