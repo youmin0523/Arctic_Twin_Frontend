@@ -19,6 +19,7 @@ import Minimap from './components/hud/Minimap';
 import WeatherHud from './components/hud/WeatherHud';
 import RLProgressOverlay from './components/hud/RLProgressOverlay';
 import AvoidanceMetricsHUD from './components/hud/AvoidanceMetricsHUD';
+import AlertLog from './components/hud/AlertLog';
 import TrendReportProgressOverlay from './components/hud/TrendReportProgressOverlay';
 import TrendReportPanel from './components/hud/TrendReportPanel';
 import WhatIfPanel from './components/hud/WhatIfPanel';
@@ -369,6 +370,22 @@ function AppInner() {
   // 토스트 알림 상태
   const [toastMsg, setToastMsg] = useState('');
   const toastTimerRef = useRef(null);
+  // 누적 알림 로그 (육지/빙산 경고·회피 적용 등) — 최근 80개 유지
+  const [notifLog, setNotifLog] = useState([]);
+  const notifSeqRef = useRef(0);
+  const pushLog = useCallback((msg, level = 'info') => {
+    if (!msg) return;
+    const d = new Date();
+    const time = `${String(d.getHours()).padStart(2, '0')}:${String(
+      d.getMinutes(),
+    ).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+    setNotifLog((prev) => {
+      // 직전과 동일 메시지면 중복 누적 방지
+      if (prev.length && prev[0].msg === msg) return prev;
+      const entry = { id: ++notifSeqRef.current, time, msg, level };
+      return [entry, ...prev].slice(0, 80);
+    });
+  }, []);
 
   // ── RL 학습 중 멀티 선박 시각화 ──────────────────────────────
   const [rlShips, setRlShips] = useState([]);
@@ -466,7 +483,31 @@ function AppInner() {
     setToastMsg(msg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToastMsg(''), duration);
-  }, []);
+    // 모든 토스트 알림(경로 생성/회피 적용 등)을 누적 로그에도 기록
+    const level = /위험|충돌|실패|경고/.test(msg)
+      ? 'warn'
+      : /완료|적용|생성/.test(msg)
+        ? 'ok'
+        : 'info';
+    pushLog(msg, level);
+  }, [pushLog]);
+
+  // 근접 경고(육지/빙산 충돌 위험)를 레벨 전이 시 1회 로그에 기록
+  const prevProxRef = useRef('none');
+  useEffect(() => {
+    const pa = state.proximityAlert;
+    const lvl = (pa && pa.level) || 'none';
+    if ((lvl === 'warning' || lvl === 'critical') && prevProxRef.current !== lvl) {
+      const typeKo =
+        pa.type === 'land' ? '육지' : pa.type === 'iceberg' ? '빙산' : '장애물';
+      const dist = pa.message || (pa.distM ? `${Math.round(pa.distM)}m` : '');
+      pushLog(
+        `${typeKo} 충돌 위험${lvl === 'critical' ? ' (긴급)' : ''} — ${dist}`,
+        'warn',
+      );
+    }
+    prevProxRef.current = lvl;
+  }, [state.proximityAlert, pushLog]);
 
   // ── 시뮬레이션용 refs (rAF 내에서 최신 state 접근) ───────────
   const isSimulatingRef = useRef(false);
@@ -3048,12 +3089,24 @@ function AppInner() {
             avoidance={state.avoidance}
           />
 
-          {/* AI 자율 회피 런타임 지표 (RL 성공률/폴백률/평균신뢰도) */}
-          <div style={{ position: 'absolute', left: 12, bottom: 90, zIndex: 280, pointerEvents: 'none' }}>
+          {/* AI 자율 회피 지표(상단) + 그 아래 누적 알림 로그 */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 12,
+              top: 60,
+              zIndex: 280,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              pointerEvents: 'none',
+            }}
+          >
             <AvoidanceMetricsHUD
               getMetrics={() => rlControllerRef.current?.getMetrics()}
               active={state.isSimulating && !state.manualMode}
             />
+            <AlertLog entries={notifLog} />
           </div>
 
           {/* 웨이포인트 에디터 (단계 C) — 글로브 위 직접 편집 + 패널 */}
