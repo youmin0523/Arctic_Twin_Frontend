@@ -407,7 +407,10 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
     if (!viewer || viewer.isDestroyed()) return;
 
     const type = shipSpecs.type || 'icebreaker';
-    const position = Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, 0);
+    // //* [Modified Code] 지구 반대편에서 비치는 현상 방지를 위해 선박을 해수면보다
+    //   약간(3km) 띄워 둔다. 깊이 테스트가 켜져도(아래 disableDepthTestDistance)
+    //   가까운 면에서는 글로브보다 앞서 보이고, 반대편에서는 글로브에 가려진다.
+    const position = Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, 3000);
     // Billboard rotation: 캔버스에서 선수가 위(북)를 향해 그려짐
     // Cesium billboard rotation은 반시계 양수 → heading(시계 양수)이므로 부호 반전
     const rot = -Cesium.Math.toRadians(heading);
@@ -437,7 +440,11 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
           rotation: rot,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          // //! [Original Code] Number.POSITIVE_INFINITY → 깊이 테스트가 항상 꺼져
+          //   지구 반대편 선박까지 화면 앞으로 그려지는 버그가 있었다.
+          // //* [Modified Code] 20km 이내(근접 줌)만 깊이 테스트 비활성(지형 클리핑 방지),
+          //   그 너머는 깊이 테스트 적용 → 반대 반구의 선박은 글로브에 가려짐.
+          disableDepthTestDistance: 20000,
           scaleByDistance: new Cesium.NearFarScalar(5000, 1.8, 500000, 0.6),
         },
         label: {
@@ -489,7 +496,8 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
 
     // 추가/업데이트
     ships.forEach(ship => {
-      const pos = Cesium.Cartesian3.fromDegrees(ship.lon, ship.lat, 500);
+      // //* [Modified Code] 반대편 비침 방지: 해수면보다 2km 띄움 (아래 깊이 테스트와 함께)
+      const pos = Cesium.Cartesian3.fromDegrees(ship.lon, ship.lat, 2000);
       const rot = -Cesium.Math.toRadians(ship.heading || 0);
       const iconUrl = createRLShipIcon(ship.route, ship.shipType);
 
@@ -510,7 +518,9 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
             rotation: rot,
             verticalOrigin: Cesium.VerticalOrigin.CENTER,
             horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            // //* [Modified Code] 반대 반구 RL 선박이 비치지 않도록 깊이 테스트 적용
+            //   (50km 이내 근접 줌에서만 비활성 — 광역 뷰에선 글로브에 가려짐)
+            disableDepthTestDistance: 50000,
             scaleByDistance: new Cesium.NearFarScalar(100000, 1.8, 8000000, 0.5),
           },
           label: {

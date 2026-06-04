@@ -9,6 +9,11 @@ import React, {
 import * as CesiumLib from 'cesium';
 import { Deck } from '@deck.gl/core';
 import { ScatterplotLayer, PathLayer, GeoJsonLayer } from '@deck.gl/layers';
+import {
+  makeOcclusion,
+  pointVisible,
+  occlusionNearlyEqual,
+} from '../services/globeOcclusion';
 // 테스트 주석
 // ---------------------------------------------------------------------------
 // Procedural data generators -- mirrors arctic-hybrid.html lines 1792-1840
@@ -190,6 +195,43 @@ function buildLayers(iceData, bergData, dangerGeoJSON, realBergData) {
 }
 
 // ---------------------------------------------------------------------------
+// Globe horizon culling — 지구 반대편(뒤편) 점·폴리곤 제거
+// deck.gl 평면 투영은 뒤편 좌표를 앞으로 투영하므로, 카메라 가시 반구
+// 밖의 데이터를 미리 걸러 "지구 너머가 비치는" 현상을 막는다.
+// ---------------------------------------------------------------------------
+function cullPoints(arr, occ) {
+  if (!occ || !arr) return arr || [];
+  return arr.filter((d) => pointVisible(d.lon, d.lat, occ));
+}
+
+function cullDangerGeo(geo, occ) {
+  if (!occ || !geo || !geo.features) return geo;
+  const features = geo.features.filter((f) => {
+    const ring = f.geometry?.coordinates?.[0];
+    if (!ring || !ring.length) return true;
+    // 링 중심(평균 좌표)이 가시 반구에 있으면 표시
+    let lon = 0;
+    let lat = 0;
+    for (const [lo, la] of ring) {
+      lon += lo;
+      lat += la;
+    }
+    return pointVisible(lon / ring.length, lat / ring.length, occ);
+  });
+  return { ...geo, features };
+}
+
+// occ(가림 컨텍스트)를 적용해 가시 데이터만으로 레이어 빌드
+function buildVisibleLayers(iceData, bergData, dangerGeo, realBergData, occ) {
+  return buildLayers(
+    cullPoints(iceData, occ),
+    cullPoints(bergData, occ),
+    cullDangerGeo(dangerGeo, occ),
+    cullPoints(realBergData, occ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -206,7 +248,23 @@ const DeckOverlay = forwardRef(function DeckOverlay(
   const realBergDataRef = useRef(null);
   const postRenderListenerRef = useRef(null);
   const isVisibleRef = useRef(visible);
+  const occRef = useRef(null); // 현재 적용 중인 가림(occlusion) 컨텍스트
   const [isVisible, setIsVisible] = useState(visible);
+
+  // 현재 데이터(refs) + 현재 occ 로 가시 레이어를 deck 에 반영
+  const pushLayers = useCallback(() => {
+    const deckInstance = deckRef.current;
+    if (!deckInstance || !isVisibleRef.current) return;
+    deckInstance.setProps({
+      layers: buildVisibleLayers(
+        iceDataRef.current,
+        bergDataRef.current,
+        dangerGeoRef.current,
+        realBergDataRef.current,
+        occRef.current,
+      ),
+    });
+  }, []);
 
   // Keep isVisible in sync with the visible prop
   useEffect(() => {
@@ -246,8 +304,17 @@ const DeckOverlay = forwardRef(function DeckOverlay(
         pitch: Math.max(0, Math.min(85, 90 + pitchDeg)),
       },
     });
+
+    // 지구 반대편 가림 재계산 — 카메라가 충분히 움직였을 때만 레이어 재빌드
+    // (매 프레임 setProps({layers})는 비용이 크므로 방향 변화 임계로 억제)
+    const nextOcc = makeOcclusion(lon, lat, alt);
+    if (!occlusionNearlyEqual(nextOcc, occRef.current)) {
+      occRef.current = nextOcc;
+      pushLayers();
+    }
+
     deckInstance.redraw('syncDeckView');
-  }, [cesiumViewer]);
+  }, [cesiumViewer, pushLayers]);
 
   // ----- Initialise deck.gl instance -----
   useEffect(() => {
@@ -328,17 +395,10 @@ const DeckOverlay = forwardRef(function DeckOverlay(
     if (!isVisible && deckRef.current) {
       deckRef.current.setProps({ layers: [] });
     } else if (isVisible && deckRef.current) {
-      // Restore layers when becoming visible
-      deckRef.current.setProps({
-        layers: buildLayers(
-          iceDataRef.current,
-          bergDataRef.current,
-          dangerGeoRef.current,
-          realBergDataRef.current,
-        ),
-      });
+      // Restore layers when becoming visible (현재 가림 컨텍스트 유지)
+      pushLayers();
     }
-  }, [isVisible]);
+  }, [isVisible, pushLayers]);
 
   // ----- Imperative handle for parent usage -----
   useImperativeHandle(
@@ -391,16 +451,9 @@ const DeckOverlay = forwardRef(function DeckOverlay(
         // 데이터 변경 버전 증가 — deck.gl이 layer diffing에서 변경 감지하도록
         _layerDataVersion++;
 
-        // isVisibleRef 사용 — stale closure 방지
+        // isVisibleRef 사용 — stale closure 방지 (현재 가림 컨텍스트 적용)
         if (deckRef.current && isVisibleRef.current) {
-          deckRef.current.setProps({
-            layers: buildLayers(
-              iceDataRef.current,
-              bergDataRef.current,
-              dangerGeoRef.current,
-              realBergDataRef.current,
-            ),
-          });
+          pushLayers();
           deckRef.current.redraw('updateLayers');
         }
       },
