@@ -13,7 +13,7 @@
  * 위성 조감·선미 추적·수동 조종 어느 뷰에서도 렌더됨 — 뷰 독립적 HUD.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   sampleShipAt,
   sampleIcebreakersAt,
@@ -118,6 +118,9 @@ export default function VoyageInfoPanel({
   araonControl, // Live 모드 수동 호출/복귀: { mode, onCall, onRecall } | null
   onClose,
 }) {
+  // 패널 접기/펼치기 — 우측으로 접으면 핸들만 남고, 다시 누르면 좌측으로 펼침
+  const [collapsed, setCollapsed] = useState(false);
+
   // ── Voyage / Live 통합 snapshot — useMemo 우회, 매 렌더마다 직접 계산 ──
   // 이유: 매 tick 마다 트레이스에서 보간해 읽어야 하고, 계산량이 가벼워
   //       memo 비용(의존성 비교) 보다 직접 호출이 저렴하고 staleness 없음.
@@ -237,8 +240,41 @@ export default function VoyageInfoPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
+        // 접힘: 우측으로 밀어 핸들(약 26px)만 남김. transition 으로 부드럽게.
+        transform: collapsed ? 'translateX(calc(100% - 26px))' : 'translateX(0)',
+        transition: 'transform 0.28s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
+      {/* 접기/펼치기 토글 — 패널 좌측 가장자리 탭 (접혀도 보임) */}
+      <button
+        type="button"
+        className="dt-panel-collapse-btn"
+        onClick={() => setCollapsed((c) => !c)}
+        title={collapsed ? '패널 펼치기' : '패널 접기'}
+        aria-label={collapsed ? '패널 펼치기' : '패널 접기'}
+        style={{
+          position: 'absolute',
+          left: -22,
+          top: 6,
+          width: 22,
+          height: 46,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: '1px solid rgba(34,211,238,0.45)',
+          borderRight: 'none',
+          borderRadius: '6px 0 0 6px',
+          background: 'rgba(5,10,20,0.9)',
+          color: '#67e8f9',
+          fontSize: 13,
+          fontWeight: 700,
+          cursor: 'pointer',
+          backdropFilter: 'blur(6px)',
+          pointerEvents: 'auto',
+        }}
+      >
+        {collapsed ? '◀' : '▶'}
+      </button>
       {/* ── A. 항로 상황 ────────────────────────────────── */}
       <section
         style={{

@@ -238,6 +238,9 @@
   .dt-alert-log {
     top: calc(var(--header-height) + 264px) !important;
   }
+
+  /* 정보 패널 접기 토글은 데스크톱(우측 도킹)용 — 모바일(중앙 정렬)에선 숨김 */
+  .dt-panel-collapse-btn { display: none !important; }
 }
 
 /* 아주 좁은 폰 (≤380px): 사이드바 폭 추가 축소 */
