@@ -76,6 +76,7 @@ import {
   estimateBergGeometry,
   bergPixelSize,
   bergTypeLabel,
+  resolveBergSize,
 } from './services/bergDimensions';
 import ProximityWarningOverlay from './components/hud/ProximityWarningOverlay';
 import WaypointEditor from './components/WaypointEditor';
@@ -1906,21 +1907,32 @@ function AppInner() {
           );
           viewer._bergPointCollection = pointCollection;
 
+          // ── 크기 정규화: 실측(NIC/IIP·SAR-YOLO)은 그대로, 미상(Copernicus)은
+          //    결정적 대표 크기로 채워 시각적 다양성 부여 + sizeEstimated 표시 ──
+          for (const b of bergList) {
+            const sz = resolveBergSize(b);
+            b.length_m = sz.lengthM;
+            b.width_m = sz.widthM;
+            b.sizeEstimated = sz.sizeEstimated;
+          }
+
           for (const b of bergList) {
             const isCopernicus = (b.source || '').includes('Copernicus');
             // SAR-RL 콜라보: sentinel1_sar 소스(YOLO 탐지)는 시각적으로 구별
             const isSar = (b.source || '').includes('sentinel1_sar');
-            const color = isSar
+            const baseColor = isSar
               ? Cesium.Color.CYAN
               : isCopernicus
                 ? Cesium.Color.ORANGE
                 : Cesium.Color.YELLOW;
+            // 크기 추정(대표값) 빙산은 반투명 → 실측과 시각적으로 구분
+            const color = b.sizeEstimated ? baseColor.withAlpha(0.5) : baseColor;
 
             pointCollection.add({
               // //* [Modified Code] 해수면 위 2km 로 띄워, 깊이 테스트가 켜져도
               //   가까운 면에서는 글로브 앞에 보이고 반대 반구에서는 가려지도록.
               position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 2000),
-              // //* [Modified Code] 고정 크기 → 실측 길이(length_m)에 비례한 크기.
+              // //* [Modified Code] 고정 크기 → 길이(length_m)에 비례한 크기.
               //   소스별 최소 크기는 유지(가시성), 큰 빙산일수록 점이 커진다.
               pixelSize: bergPixelSize(b.length_m, isSar ? 8 : isCopernicus ? 6 : 7),
               color,
@@ -1977,8 +1989,12 @@ function AppInner() {
                 rows.push(`<div class="bip-row"><span>📍 위치</span><b>${b.lat?.toFixed(3)}°, ${b.lon?.toFixed(3)}°</b></div>`);
                 if (b.type)
                   rows.push(`<div class="bip-row"><span>🧊 형태</span><b>${bergTypeLabel(b.type)}</b></div>`);
-                if (b.length_m)
-                  rows.push(`<div class="bip-row"><span>📏 크기(실측)</span><b>${(g.lengthM / 1000).toFixed(1)} × ${(g.widthM / 1000).toFixed(1)} km</b></div>`);
+                if (b.length_m) {
+                  const sizeTag = b.sizeEstimated
+                    ? '<span class="bip-tag bip-tag--est">추정</span>'
+                    : '<span class="bip-tag bip-tag--meas">실측</span>';
+                  rows.push(`<div class="bip-row"><span>📏 크기 ${sizeTag}</span><b>${(g.lengthM / 1000).toFixed(1)} × ${(g.widthM / 1000).toFixed(1)} km</b></div>`);
+                }
                 rows.push(`<div class="bip-row"><span>📐 두께(추정)</span><b>${g.thicknessM.toLocaleString()} m</b></div>`);
                 rows.push(`<div class="bip-row"><span>🌊 흘수(추정)</span><b>${g.draftM.toLocaleString()} m</b></div>`);
                 rows.push(`<div class="bip-row"><span>⛰ 수면 위(추정)</span><b>${g.freeboardM.toLocaleString()} m</b></div>`);
@@ -1988,11 +2004,14 @@ function AppInner() {
                   rows.push(`<div class="bip-row"><span>🔄 갱신</span><b>${viewer._bergUpdatedAt}</b></div>`);
 
                 if (popup) {
+                  const note = b.sizeEstimated
+                    ? '이 빙산은 위치만 관측됨 — 크기는 대표 분포 추정값, 두께·흘수는 그로부터 추정.'
+                    : '크기는 실측, 두께·흘수·수면 위 높이는 실측 길이 기반 추정치입니다.';
                   popup.innerHTML =
                     `<div class="bip-head"><span>🧊 ${b.id || 'Iceberg'}</span>` +
                     `<button type="button" class="bip-close" aria-label="닫기">✕</button></div>` +
                     rows.join('') +
-                    `<div class="bip-note">두께·흘수·수면 위 높이는 실측 길이 기반 추정치입니다.</div>`;
+                    `<div class="bip-note">${note}</div>`;
                   // 클릭 위치 근처에 배치 (화면 밖으로 넘치지 않게 보정)
                   const cw = viewer.scene.canvas.clientWidth;
                   const px = Math.min(click.position.x + 14, cw - 250);
