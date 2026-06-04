@@ -754,11 +754,27 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       );
       if (dist > VISIBLE_RANGE) { filteredCount++; continue; }
 
-      const size = Math.max(berg.size || 5000, 500);
-      const h = size * 0.15;
-      const bw = ((size * 0.3) / 1.5) * 2;
-      const bd = bw * 0.85;
-      const geo = makeIceGeo('medium', bw, h, bd);
+      // //* [Modified Code] 실측 길이·폭 + 추정 수면위 높이(freeboard) 반영.
+      //   실제 빙산(lengthM/widthM 보유)은 실측 풋프린트로, 대리(고농도 해빙
+      //   셀)는 기존 size 기반으로 렌더. 월드 스케일은 미터/1.5.
+      let bw, h, bd, iceShape;
+      if (berg.lengthM && berg.widthM) {
+        const WS = 1.5; // 월드 스케일(미터→월드 유닛)
+        // 풋프린트: 폭/길이를 실측대로 (가시성·성능 위해 상·하한 클램프)
+        bw = Math.min(Math.max(berg.widthM / WS, 30), 8000);
+        bd = Math.min(Math.max(berg.lengthM / WS, 30), 8000);
+        // 수면 위 높이 = 추정 freeboard (작은 빙산도 보이도록 하한)
+        h = Math.min(Math.max((berg.freeboardM || 10) / WS, 8), 600);
+        iceShape = berg.type === 'tabular' ? 'tabular'
+          : berg.type === 'large' ? 'large' : 'medium';
+      } else {
+        const size = Math.max(berg.size || 5000, 500);
+        h = size * 0.15;
+        bw = ((size * 0.3) / 1.5) * 2;
+        bd = bw * 0.85;
+        iceShape = 'medium';
+      }
+      const geo = makeIceGeo(iceShape, bw, h, bd);
       const mesh = new THREE.Mesh(geo, realBergMat);
       mesh.castShadow = true;
       const grp = new THREE.Group();

@@ -158,6 +158,65 @@ html, body, #root {
 }
 #gebco-depth-popup.show { display: block; }
 
+/* ── 빙산 정보 팝업 (크기 실측 + 두께/흘수 추정) ── */
+#berg-info-popup {
+  position: absolute;
+  z-index: 320;
+  min-width: 230px;
+  max-width: 280px;
+  background: rgba(7, 14, 28, 0.95);
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  border-radius: 8px;
+  padding: 0 0 8px;
+  font-size: 11.5px;
+  color: #e2e8f0;
+  display: none;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  overflow: hidden;
+}
+#berg-info-popup.show { display: block; }
+#berg-info-popup .bip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: rgba(34, 211, 238, 0.14);
+  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+  font-weight: 700;
+  color: #67e8f9;
+  letter-spacing: 0.3px;
+}
+#berg-info-popup .bip-close {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 4px;
+}
+#berg-info-popup .bip-close:hover { color: #fff; }
+#berg-info-popup .bip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 10px;
+}
+#berg-info-popup .bip-row span { color: #94a3b8; white-space: nowrap; }
+#berg-info-popup .bip-row b { color: #f1f5f9; font-weight: 600; text-align: right; }
+#berg-info-popup .bip-note {
+  margin: 6px 10px 0;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.3);
+  font-size: 10px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
 /* ════════════════════════════════════════════════
    Bridge Overlay (preserved)
    ════════════════════════════════════════════════ */

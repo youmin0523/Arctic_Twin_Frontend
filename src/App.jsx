@@ -72,6 +72,11 @@ import { createRLAvoidanceController } from './services/rlAvoidanceController';
 import { landAhead, initLandMask } from './services/arcticPathfinder';
 import { landAheadGlobal, isGlobalLandMaskReady, initGlobalLandMask } from './services/landMaskGlobal';
 import { fetchEditedRoutes, saveEditedRoutes } from './services/editedRoutesApi';
+import {
+  estimateBergGeometry,
+  bergPixelSize,
+  bergTypeLabel,
+} from './services/bergDimensions';
 import ProximityWarningOverlay from './components/hud/ProximityWarningOverlay';
 import WaypointEditor from './components/WaypointEditor';
 import useVoyagePlayback from './hooks/useVoyagePlayback';
@@ -1915,7 +1920,9 @@ function AppInner() {
               // //* [Modified Code] 해수면 위 2km 로 띄워, 깊이 테스트가 켜져도
               //   가까운 면에서는 글로브 앞에 보이고 반대 반구에서는 가려지도록.
               position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 2000),
-              pixelSize: isSar ? 11 : (isCopernicus ? 7 : 10),
+              // //* [Modified Code] 고정 크기 → 실측 길이(length_m)에 비례한 크기.
+              //   소스별 최소 크기는 유지(가시성), 큰 빙산일수록 점이 커진다.
+              pixelSize: bergPixelSize(b.length_m, isSar ? 8 : isCopernicus ? 6 : 7),
               color,
               outlineColor: isSar
                 ? Cesium.Color.DEEPSKYBLUE
@@ -1957,24 +1964,48 @@ function AppInner() {
               viewer.scene.canvas,
             );
             handler.setInputAction((click) => {
+              const popup = document.getElementById('berg-info-popup');
               const picked = viewer.scene.pick(click.position);
               if (
                 picked?.primitive instanceof Cesium.PointPrimitive &&
                 picked.primitive.id
               ) {
                 const b = picked.primitive.id;
-                const isCop = (b.source || '').includes('Copernicus');
-                const lines = [`🧊 ${b.id || 'Iceberg'}`];
-                lines.push(`📍 ${b.lat?.toFixed(4)}°N, ${b.lon?.toFixed(4)}°E`);
-                lines.push(`📡 ${b.source}`);
-                if (b.period) lines.push(`📅 ${b.period}`);
+                // 실측 길이/폭으로 흘수·두께·수면위 높이 추정
+                const g = estimateBergGeometry(b);
+                const rows = [];
+                rows.push(`<div class="bip-row"><span>📍 위치</span><b>${b.lat?.toFixed(3)}°, ${b.lon?.toFixed(3)}°</b></div>`);
+                if (b.type)
+                  rows.push(`<div class="bip-row"><span>🧊 형태</span><b>${bergTypeLabel(b.type)}</b></div>`);
                 if (b.length_m)
-                  lines.push(
-                    `📏 ${(b.length_m / 1000).toFixed(1)}km × ${(b.width_m / 1000).toFixed(1)}km`,
-                  );
+                  rows.push(`<div class="bip-row"><span>📏 크기(실측)</span><b>${(g.lengthM / 1000).toFixed(1)} × ${(g.widthM / 1000).toFixed(1)} km</b></div>`);
+                rows.push(`<div class="bip-row"><span>📐 두께(추정)</span><b>${g.thicknessM.toLocaleString()} m</b></div>`);
+                rows.push(`<div class="bip-row"><span>🌊 흘수(추정)</span><b>${g.draftM.toLocaleString()} m</b></div>`);
+                rows.push(`<div class="bip-row"><span>⛰ 수면 위(추정)</span><b>${g.freeboardM.toLocaleString()} m</b></div>`);
+                rows.push(`<div class="bip-row"><span>📡 출처</span><b>${b.source || '—'}</b></div>`);
+                if (b.period) rows.push(`<div class="bip-row"><span>📅 시점</span><b>${b.period}</b></div>`);
                 if (viewer._bergUpdatedAt)
-                  lines.push(`🔄 Updated: ${viewer._bergUpdatedAt}`);
-                alert(lines.join('\n'));
+                  rows.push(`<div class="bip-row"><span>🔄 갱신</span><b>${viewer._bergUpdatedAt}</b></div>`);
+
+                if (popup) {
+                  popup.innerHTML =
+                    `<div class="bip-head"><span>🧊 ${b.id || 'Iceberg'}</span>` +
+                    `<button type="button" class="bip-close" aria-label="닫기">✕</button></div>` +
+                    rows.join('') +
+                    `<div class="bip-note">두께·흘수·수면 위 높이는 실측 길이 기반 추정치입니다.</div>`;
+                  // 클릭 위치 근처에 배치 (화면 밖으로 넘치지 않게 보정)
+                  const cw = viewer.scene.canvas.clientWidth;
+                  const px = Math.min(click.position.x + 14, cw - 250);
+                  popup.style.left = `${Math.max(8, px)}px`;
+                  popup.style.top = `${Math.max(8, click.position.y - 10)}px`;
+                  popup.classList.add('show');
+                  const closeBtn = popup.querySelector('.bip-close');
+                  if (closeBtn)
+                    closeBtn.onclick = () => popup.classList.remove('show');
+                }
+              } else if (popup) {
+                // 빈 곳 클릭 → 팝업 닫기
+                popup.classList.remove('show');
               }
             }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
             viewer._bergClickHandler = handler;
@@ -1998,11 +2029,20 @@ function AppInner() {
               lat: c.lat,
               size: 8000 + c.weight * 15000,
             }));
-          const trackedBergs = bergList.map((b) => ({
-            lon: b.lon,
-            lat: b.lat,
-            size: b.length_m || 5000,
-          }));
+          const trackedBergs = bergList.map((b) => {
+            // 실측 길이/폭 + 추정 수면위 높이를 3D 렌더(ThreeOverlay)로 전달
+            const g = estimateBergGeometry(b);
+            return {
+              lon: b.lon,
+              lat: b.lat,
+              size: g.lengthM, // 하위호환 (대리 빙산과 공통 필드)
+              lengthM: g.lengthM,
+              widthM: g.widthM,
+              type: g.type,
+              freeboardM: g.freeboardM,
+              draftM: g.draftM,
+            };
+          });
           // 실측 빙산 우선, 고농도 셀 보충 (중복 위치 제거)
           const seen = new Set(trackedBergs.map((b) => `${b.lat.toFixed(2)},${b.lon.toFixed(2)}`));
           const merged = [...trackedBergs];
@@ -2956,6 +2996,8 @@ function AppInner() {
           <div id="polar-night-ind">극야 구간</div>
           <div id="banner" />
           <div id="gebco-depth-popup" />
+          {/* 빙산 클릭 정보 팝업 (크기 실측 + 두께/흘수 추정) */}
+          <div id="berg-info-popup" />
 
           {/* 상단바 메뉴에서 토글되는 패널들 */}
           {(activePanel === 'rl_curriculum' || activePanel === 'trend_learning') && (
