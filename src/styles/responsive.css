@@ -102,9 +102,14 @@
     transform: translateX(0);
   }
 
-  /* ── 하단 패널 → 오프캔버스 하단 서랍 ── */
+  /* ── 하단 패널 → 오프캔버스 하단 서랍 ──
+     BottomPanel 루트는 인라인 style={{position:'relative'}} 를 갖는다
+     (데스크톱에서 포털 툴팁의 위치 기준). 인라인 스타일은 미디어쿼리보다
+     우선하므로 !important 로 덮어써야 드로어(fixed)로 전환된다.
+     이 한 줄이 빠지면 .bp 가 flex 칼럼에서 제 높이를 그대로 차지해
+     3D 뷰포트가 ~150px 로 붕괴된다. */
   .bp {
-    position: fixed;
+    position: fixed !important;
     left: 0;
     right: 0;
     bottom: 0;
@@ -184,8 +189,9 @@
     top: calc(var(--header-height) + 10px);
     right: 10px;
   }
+  /* 하단 FAB 는 타임라인 바(bottom:10px, 높이 ~33px)와 겹치지 않도록 그 위에 배치 */
   .dt-fab--bottom {
-    bottom: 14px;
+    bottom: 60px;
     left: 50%;
     transform: translateX(-50%);
   }
