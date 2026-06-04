@@ -10,6 +10,59 @@
 
 import { ROUTES, ROUTE_CORRIDOR, PORT_APPROACH_WAYPOINTS, INTRA_REGION_ROUTES } from '../data/arcticRoutes';
 import { findArcticPath, initLandMask } from './arcticPathfinder';
+import {
+  isGlobalLandMaskReady,
+  initGlobalLandMask,
+  isLandGlobal,
+  findWaterDetour,
+} from './landMaskGlobal';
+
+// ── 전역 육지 회피 후처리 ──────────────────────────────────────────────
+// 연안 접근 구간(인천·상하이 앞 섬/반도, 소야해협 등)을 직선으로 스플라이스하면
+// 육지를 관통한다 → 최종 항로의 모든 인접 구간을 전역 육지마스크로 검사해,
+// 육지를 가로지르는 구간은 findWaterDetour(물길 A*)로 우회시킨다.
+// 본선·아라온이 동일 항로를 쓰므로 둘 다 육지 안전해진다.
+const DEG_TO_KM = 111;
+function segmentCrossesLand(a, b) {
+  const segKm = Math.hypot(
+    (b.lat - a.lat) * DEG_TO_KM,
+    (b.lon - a.lon) * DEG_TO_KM * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180),
+  );
+  const n = Math.max(2, Math.ceil(segKm / 5)); // ~5km 샘플
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    if (isLandGlobal(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function avoidLandGlobal(waypoints) {
+  if (!waypoints || waypoints.length < 2) return waypoints;
+  if (!isGlobalLandMaskReady()) {
+    try {
+      await initGlobalLandMask();
+    } catch (_) {
+      return waypoints; // 마스크 없으면 원본 유지(안전)
+    }
+  }
+  if (!isGlobalLandMaskReady()) return waypoints;
+
+  const out = [waypoints[0]];
+  for (let i = 1; i < waypoints.length; i++) {
+    const a = waypoints[i - 1];
+    const b = waypoints[i];
+    if (segmentCrossesLand(a, b)) {
+      const detour = findWaterDetour(a, b);
+      if (detour && detour.length) {
+        for (const p of detour) out.push({ lon: p.lon, lat: p.lat, label: '' });
+      }
+    }
+    out.push(b);
+  }
+  return out;
+}
 
 // ── 포트 분류 ──────────────────────────────────────────────────────────
 const EUROPEAN_PORTS = new Set(['ROTTERDAM', 'HAMBURG', 'LONDON', 'MURMANSK']);
@@ -83,7 +136,32 @@ function spliceRouteForPorts(
  * @param {number} maxSafeConcentration - 선박 등급별 최대 통과 가능 농도
  * @returns {Promise<Array>} 웨이포인트 배열 [{lon, lat, label}, ...]
  */
+// 공개 진입점: 원시 경로 생성 후 전역 육지 회피 후처리를 적용해
+// 연안/중위도 구간의 육지 관통·지그재그를 제거한다 (본선·아라온 공통).
 export async function generateRoute(
+  depPort,
+  arrPort,
+  routeType,
+  iceData = null,
+  icebergs = [],
+  maxSafeConcentration = 0.7,
+) {
+  const raw = await generateRouteRaw(
+    depPort,
+    arrPort,
+    routeType,
+    iceData,
+    icebergs,
+    maxSafeConcentration,
+  );
+  try {
+    return await avoidLandGlobal(raw);
+  } catch (_) {
+    return raw;
+  }
+}
+
+async function generateRouteRaw(
   depPort,
   arrPort,
   routeType,
