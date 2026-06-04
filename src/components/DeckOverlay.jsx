@@ -14,6 +14,7 @@ import {
   pointVisible,
   occlusionNearlyEqual,
 } from '../services/globeOcclusion';
+import { bergPixelSize } from '../services/bergDimensions';
 // 테스트 주석
 // ---------------------------------------------------------------------------
 // Procedural data generators -- mirrors arctic-hybrid.html lines 1792-1840
@@ -166,7 +167,8 @@ function buildLayers(iceData, bergData, dangerGeoJSON, realBergData) {
       id: 'real-bergs',
       data: realBergData || [],
       getPosition: (d) => [d.lon, d.lat],
-      getRadius: 8,
+      // 실측 길이(length_m)에 비례한 픽셀 반경 (고정 8 → 가변)
+      getRadius: (d) => bergPixelSize(d.length_m, 5),
       getFillColor: [255, 200, 0, 230],
       getLineColor: [255, 140, 0, 255],
       stroked: true,
@@ -175,6 +177,7 @@ function buildLayers(iceData, bergData, dangerGeoJSON, realBergData) {
       pickable: false,
       updateTriggers: {
         getPosition: ver,
+        getRadius: ver,
       },
     }),
 
