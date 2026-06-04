@@ -227,6 +227,17 @@
 
   /* ── 작은 화면에서 좌하단 지표 HUD 가 FAB·타임라인과 겹치지 않게 ── */
   #manual-indicator { font-size: 10px; padding: 3px 12px; }
+
+  /* ── AI 회피 지표 + 알림 로그: 좌상단 FAB(☰) 아래로 내려 겹침 방지 ──
+     데스크톱은 top:60/278 이지만 모바일은 FAB(top: header+10, 44px)와 겹치므로
+     FAB 아래로 이동. 로그도 그만큼 내려 회피지표와 안 겹치게. */
+  .dt-avoid-hud {
+    top: calc(var(--header-height) + 64px) !important;
+    width: min(62vw, 210px) !important;
+  }
+  .dt-alert-log {
+    top: calc(var(--header-height) + 264px) !important;
+  }
 }
 
 /* 아주 좁은 폰 (≤380px): 사이드바 폭 추가 축소 */
