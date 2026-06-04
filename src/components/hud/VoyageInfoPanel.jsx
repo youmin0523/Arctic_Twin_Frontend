@@ -519,7 +519,10 @@ export default function VoyageInfoPanel({
         )}
       </section>
 
-      {/* ── C. 쇄빙 저항 / 연비 라인차트 ────────────────── */}
+      {/* ── C. 쇄빙 저항 / 연비 라인차트 ──────────────────
+          Voyage 모드 전용: trace.effective_thickness_m 기반 Lindqvist 추정으로
+          시계열이 정확. Live 모드는 SIC proxy 한 점 스냅샷이라 신뢰도가 낮아 숨김. */}
+      {isVoyage && (
       <section
         style={{
           background: 'rgba(5,10,20,0.82)',
@@ -606,6 +609,7 @@ export default function VoyageInfoPanel({
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

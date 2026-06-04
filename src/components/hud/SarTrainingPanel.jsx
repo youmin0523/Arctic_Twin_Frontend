@@ -14,6 +14,9 @@ export default function SarTrainingPanel() {
       .catch(() => {});
   }, [sarTraining]);
 
+  // 언마운트 시 진행 중인 학습 상태 폴링 인터벌 정리
+  useEffect(() => () => { if (sarPollRef.current) clearInterval(sarPollRef.current); }, []);
+
   const startSarTraining = useCallback(async () => {
     setSarTraining(true);
     setSarProgress(0);

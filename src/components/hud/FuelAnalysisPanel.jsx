@@ -19,8 +19,6 @@ function analysisStage(pct) {
 }
 
 export default function FuelAnalysisPanel({ open, onToggle, currentRoute, shipSpecs }) {
-  if (!open) return null;
-
   // 선종
   const [vesselIdx, setVesselIdx] = useState(() => {
     const idx = VESSEL_TYPES.findIndex((v) => v.key === shipSpecs?.type);
@@ -105,6 +103,9 @@ export default function FuelAnalysisPanel({ open, onToggle, currentRoute, shipSp
     }
     setRunning(false);
   }, [displacement, draft, enginePower, vessel, route, speed, iceThickness, iceConcentration]);
+
+  // Rules of Hooks: 모든 hook 호출 이후에 early return (open=false→true 시 hook 개수 변동 방지)
+  if (!open) return null;
 
   const cmp = result?.comparison;
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 const ROUTES = ['NSR', 'NWP', 'TSR'];
 const ICE_CLASSES = ['PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'PC6', 'PC7', 'IA Super', 'IA', 'IB', 'IC'];
@@ -29,6 +29,9 @@ export default function TrendReportPanel({ open, onToggle }) {
   const [genComplete, setGenComplete] = useState(false);
   const genJobRef = useRef(null);
   const genPollRef = useRef(null);
+
+  // 언마운트(패널 닫기 등) 시 진행 중인 폴링 인터벌 정리 — setState-after-unmount/런어웨이 폴링 방지
+  useEffect(() => () => { if (genPollRef.current) clearInterval(genPollRef.current); }, []);
 
   // RL 모델은 백엔드에서 이미 학습된 ONNX 모델 자동 로드 (backend/model/report-service/*.onnx)
   // 그래서 UI 학습 버튼/진행률 표시 제거됨. 보고서 생성 시 자동으로 추론에 사용.

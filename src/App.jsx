@@ -370,6 +370,8 @@ function AppInner() {
   // 토스트 알림 상태
   const [toastMsg, setToastMsg] = useState('');
   const toastTimerRef = useRef(null);
+  // 월 변경 비동기 레이스 가드: 빠른 월 전환 시 늦게 도착한 이전 요청이 최신 결과를 덮어쓰지 않도록 시퀀스 토큰 사용
+  const monthChangeSeqRef = useRef(0);
   // 누적 알림 로그 (육지/빙산 경고·회피 적용 등) — 최근 80개 유지
   const [notifLog, setNotifLog] = useState([]);
   const notifSeqRef = useRef(0);
@@ -1914,6 +1916,10 @@ function AppInner() {
     async (month) => {
       const apiMonth = month === 'live' ? 'latest' : month;
 
+      // 레이스 가드: 이 호출의 시퀀스 번호 확보. 이후 await 뒤 최신 호출이 아니면 중단.
+      const seq = ++monthChangeSeqRef.current;
+      const isStale = () => seq !== monthChangeSeqRef.current;
+
       // ── 1. Cesium 위성영상 + WMS 오버레이 TIME 업데이트 ──
       const viewer = viewerRef.current;
       if (viewer && !viewer.isDestroyed() && viewer._updateWmsTime) {
@@ -1923,6 +1929,7 @@ function AppInner() {
       // ── 2. 백엔드 해빙 데이터 로드 (DeckOverlay + ThreeOverlay) ──
       try {
         const iceData = await fetchIceConcentration(apiMonth);
+        if (isStale()) return; // 더 최신 월 변경이 진행 중 → 이 결과는 폐기
 
         // DeckOverlay 포맷으로 변환
         const icePoints = (iceData?.cells || []).map((c) => ({
@@ -2009,6 +2016,9 @@ function AppInner() {
                 width_m: 5000 + c.weight * 10000,
               }));
           }
+
+          // 레이스 가드: berg/SAR fetch await 사이 더 최신 월 변경이 들어왔으면 렌더링 중단
+          if (isStale()) return;
 
           // ── PointPrimitiveCollection으로 렌더링 (700+ 빙산 성능 최적화) ──
           // 기존 컬렉션 제거

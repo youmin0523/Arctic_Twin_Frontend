@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   isHypothetical,
   countRecommendations as countRec,
@@ -139,6 +139,9 @@ export default function WhatIfPanel({ route = 'NSR', iceClass = 'PC5' }) {
   const [showStats, setShowStats] = useState(false);
   const jobIdRef = useRef(null);
   const pollRef = useRef(null);
+
+  // 언마운트 시 진행 중인 폴링 인터벌 정리 — setState-after-unmount/런어웨이 폴링 방지
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const startWhatIf = useCallback(async () => {
     setRunning(true);
