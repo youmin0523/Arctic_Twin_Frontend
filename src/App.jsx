@@ -1977,16 +1977,81 @@ function AppInner() {
             );
             handler.setInputAction((click) => {
               const popup = document.getElementById('berg-info-popup');
+              if (!popup) return;
               const picked = viewer.scene.pick(click.position);
+              // 빙산 점은 id=berg 데이터 객체, 웨이포인트는 id=Cesium.Entity
+              const obj = picked?.primitive?.id ?? picked?.id;
+
+              // 공통 팝업 렌더러 (theme: 'berg' | 'waypoint')
+              const showPopup = (theme, headHtml, rows, note) => {
+                popup.classList.toggle('is-waypoint', theme === 'waypoint');
+                popup.innerHTML =
+                  `<div class="bip-head"><span>${headHtml}</span>` +
+                  `<button type="button" class="bip-close" aria-label="닫기">✕</button></div>` +
+                  rows.join('') +
+                  (note ? `<div class="bip-note">${note}</div>` : '');
+                const cw = viewer.scene.canvas.clientWidth;
+                const px = Math.min(click.position.x + 14, cw - 250);
+                popup.style.left = `${Math.max(8, px)}px`;
+                popup.style.top = `${Math.max(8, click.position.y - 10)}px`;
+                popup.classList.add('show');
+                const cb = popup.querySelector('.bip-close');
+                if (cb) cb.onclick = () => popup.classList.remove('show');
+              };
+              const fmtLat = (v) => `${Math.abs(v).toFixed(4)}°${v >= 0 ? 'N' : 'S'}`;
+              const fmtLon = (v) => `${Math.abs(v).toFixed(4)}°${v >= 0 ? 'E' : 'W'}`;
+
+              // ── 1) 웨이포인트 (point 그래픽을 가진 Entity) ──
+              if (obj instanceof Cesium.Entity && obj.point) {
+                let lat = null, lon = null;
+                try {
+                  const c = obj.position?.getValue(Cesium.JulianDate.now());
+                  if (c) {
+                    const carto = Cesium.Cartographic.fromCartesian(c);
+                    lat = Cesium.Math.toDegrees(carto.latitude);
+                    lon = Cesium.Math.toDegrees(carto.longitude);
+                  }
+                } catch (e) { /* ignore */ }
+                const wps = activeWpRef.current || [];
+                let idx = -1, best = Infinity;
+                if (lat != null)
+                  for (let i = 0; i < wps.length; i++) {
+                    const d = Math.abs(wps[i].lat - lat) + Math.abs(wps[i].lon - lon);
+                    if (d < best) { best = d; idx = i; }
+                  }
+                const wp = idx >= 0 ? wps[idx] : null;
+                let lblText = '';
+                try {
+                  const t = obj.label?.text;
+                  lblText = t && t.getValue ? t.getValue(Cesium.JulianDate.now()) : t || '';
+                } catch (e) { /* ignore */ }
+                const name = lblText || wp?.label || (idx >= 0 ? `경유점 ${idx + 1}` : '경유점');
+                const routeKey = currentRouteKeyRef.current || '—';
+                const rows = [];
+                if (lat != null) {
+                  rows.push(`<div class="bip-row"><span>📍 위도</span><b>${fmtLat(lat)}</b></div>`);
+                  rows.push(`<div class="bip-row"><span>📍 경도</span><b>${fmtLon(lon)}</b></div>`);
+                }
+                rows.push(`<div class="bip-row"><span>🧭 항로</span><b>${routeKey}</b></div>`);
+                if (idx >= 0)
+                  rows.push(`<div class="bip-row"><span>🔢 순번</span><b>${idx + 1} / ${wps.length}</b></div>`);
+                if (wp?.label)
+                  rows.push(`<div class="bip-row"><span>🏷 지점명</span><b>${wp.label}</b></div>`);
+                showPopup('waypoint', `📌 ${name}`, rows, '경로 상의 경유점(waypoint) 정보입니다.');
+                return;
+              }
+
+              // ── 2) 빙산 (PointPrimitiveCollection, id = berg 데이터 객체) ──
               if (
                 picked?.primitive instanceof Cesium.PointPrimitive &&
-                picked.primitive.id
+                obj &&
+                !(obj instanceof Cesium.Entity) &&
+                (obj.source !== undefined || obj.lat !== undefined)
               ) {
-                const b = picked.primitive.id;
-                // 실측 길이/폭으로 흘수·두께·수면위 높이 추정
+                const b = obj;
                 const g = estimateBergGeometry(b);
                 const rows = [];
-                rows.push(`<div class="bip-row"><span>📍 위치</span><b>${b.lat?.toFixed(3)}°, ${b.lon?.toFixed(3)}°</b></div>`);
+                rows.push(`<div class="bip-row"><span>📍 위치</span><b>${fmtLat(b.lat)}, ${fmtLon(b.lon)}</b></div>`);
                 if (b.type)
                   rows.push(`<div class="bip-row"><span>🧊 형태</span><b>${bergTypeLabel(b.type)}</b></div>`);
                 if (b.length_m) {
@@ -2002,30 +2067,15 @@ function AppInner() {
                 if (b.period) rows.push(`<div class="bip-row"><span>📅 시점</span><b>${b.period}</b></div>`);
                 if (viewer._bergUpdatedAt)
                   rows.push(`<div class="bip-row"><span>🔄 갱신</span><b>${viewer._bergUpdatedAt}</b></div>`);
-
-                if (popup) {
-                  const note = b.sizeEstimated
-                    ? '이 빙산은 위치만 관측됨 — 크기는 대표 분포 추정값, 두께·흘수는 그로부터 추정.'
-                    : '크기는 실측, 두께·흘수·수면 위 높이는 실측 길이 기반 추정치입니다.';
-                  popup.innerHTML =
-                    `<div class="bip-head"><span>🧊 ${b.id || 'Iceberg'}</span>` +
-                    `<button type="button" class="bip-close" aria-label="닫기">✕</button></div>` +
-                    rows.join('') +
-                    `<div class="bip-note">${note}</div>`;
-                  // 클릭 위치 근처에 배치 (화면 밖으로 넘치지 않게 보정)
-                  const cw = viewer.scene.canvas.clientWidth;
-                  const px = Math.min(click.position.x + 14, cw - 250);
-                  popup.style.left = `${Math.max(8, px)}px`;
-                  popup.style.top = `${Math.max(8, click.position.y - 10)}px`;
-                  popup.classList.add('show');
-                  const closeBtn = popup.querySelector('.bip-close');
-                  if (closeBtn)
-                    closeBtn.onclick = () => popup.classList.remove('show');
-                }
-              } else if (popup) {
-                // 빈 곳 클릭 → 팝업 닫기
-                popup.classList.remove('show');
+                const note = b.sizeEstimated
+                  ? '이 빙산은 위치만 관측됨 — 크기는 대표 분포 추정값, 두께·흘수는 그로부터 추정.'
+                  : '크기는 실측, 두께·흘수·수면 위 높이는 실측 길이 기반 추정치입니다.';
+                showPopup('berg', `🧊 ${b.id || 'Iceberg'}`, rows, note);
+                return;
               }
+
+              // 그 외(빈 곳·선박 등) → 팝업 닫기
+              popup.classList.remove('show');
             }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
             viewer._bergClickHandler = handler;
           }

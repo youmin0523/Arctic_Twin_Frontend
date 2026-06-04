@@ -177,6 +177,16 @@ html, body, #root {
   overflow: hidden;
 }
 #berg-info-popup.show { display: block; }
+/* 웨이포인트 팝업 — 빙산(청록)과 구분되는 앰버 테마 */
+#berg-info-popup.is-waypoint {
+  border-color: rgba(250, 204, 21, 0.55);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(250, 204, 21, 0.15);
+}
+#berg-info-popup.is-waypoint .bip-head {
+  background: rgba(250, 204, 21, 0.16);
+  border-bottom-color: rgba(250, 204, 21, 0.35);
+  color: #fde047;
+}
 #berg-info-popup .bip-head {
   display: flex;
   align-items: center;
