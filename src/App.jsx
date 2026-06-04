@@ -3104,8 +3104,10 @@ function AppInner() {
             avoidance={state.avoidance}
           />
 
-          {/* AI 자율 회피 지표 — 좌상단 (시뮬 중 위협 발생 시에만 표시) */}
+          {/* AI 자율 회피 지표 — 좌상단 (시뮬 중 위협 발생 시에만 표시).
+              모바일(드로어 모드)에서는 좌상단 FAB 와 겹치지 않게 아래로 내림(responsive.css). */}
           <div
+            className="dt-avoid-hud"
             style={{
               position: 'absolute',
               left: 12,
@@ -3122,7 +3124,7 @@ function AppInner() {
           </div>
           {/* 누적 알림 로그 — 회피 지표 아래 "고정" 위치 (지표 등장에 밀리지 않음).
               좌하단 FollowMiniMap(bottom:60)과 겹치지 않도록 상단에 배치·높이 제한. */}
-          <div style={{ position: 'absolute', left: 12, top: 278, zIndex: 280 }}>
+          <div className="dt-alert-log" style={{ position: 'absolute', left: 12, top: 278, zIndex: 280 }}>
             <AlertLog entries={notifLog} maxHeight={170} />
           </div>
 
