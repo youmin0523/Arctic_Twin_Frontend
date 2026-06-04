@@ -1912,7 +1912,9 @@ function AppInner() {
                 : Cesium.Color.YELLOW;
 
             pointCollection.add({
-              position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 0),
+              // //* [Modified Code] 해수면 위 2km 로 띄워, 깊이 테스트가 켜져도
+              //   가까운 면에서는 글로브 앞에 보이고 반대 반구에서는 가려지도록.
+              position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 2000),
               pixelSize: isSar ? 11 : (isCopernicus ? 7 : 10),
               color,
               outlineColor: isSar
@@ -1921,14 +1923,19 @@ function AppInner() {
                   ? Cesium.Color.DARKORANGE
                   : Cesium.Color.ORANGERED,
               outlineWidth: 2,
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              // //! [Original Code] Number.POSITIVE_INFINITY → 깊이 테스트가 꺼져
+              //   지구 반대편 빙산까지 화면 앞으로 그려지는 버그가 있었다.
+              // //* [Modified Code] 50km 이내(근접 줌)만 비활성, 그 너머는 깊이 테스트
+              //   적용 → 반대 반구의 빙산은 글로브에 가려진다.
+              disableDepthTestDistance: 50000,
               id: b, // 클릭 시 데이터 접근용
             });
 
             // NIC/IIP 빙산만 라벨 (Copernicus 723개 라벨은 성능 이슈)
             if (b.id && !isCopernicus) {
               const ent = viewer.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 0),
+                // //* [Modified Code] 점과 동일하게 2km 부양 → 반대 반구 라벨은 글로브에 가려짐
+                position: Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 2000),
                 label: {
                   text: b.id,
                   font: '11px sans-serif',

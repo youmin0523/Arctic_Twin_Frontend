@@ -175,7 +175,7 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
         position: Cesium.Cartesian3.fromDegrees(
           ib.position.lon,
           ib.position.lat,
-          0,
+          2000, // //* 반대 반구 비침 방지를 위해 해수면 위로 부양
         ),
         billboard: {
           image: ibCanvasRef.current,
@@ -185,7 +185,8 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
           alignedAxis: Cesium.Cartesian3.UNIT_Z,
           rotation: 0,   // 첫 프레임은 heading 미정 — 다음 tick 부터 갱신
           color: ibStatusColor(ib.status),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          // //* 반대 반구 쇄빙선이 비치지 않도록 유한 깊이거리 (근접 줌만 비활성)
+          disableDepthTestDistance: 50000,
           verticalOrigin: Cesium.VerticalOrigin.CENTER,
           horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
           scaleByDistance: new Cesium.NearFarScalar(
@@ -204,7 +205,7 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
           style: Cesium.LabelStyle.FILL_AND_OUTLINE,
           showBackground: true,
           backgroundColor: Cesium.Color.fromCssColorString('#000000cc'),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          disableDepthTestDistance: 50000,
         },
       });
       ibEntitiesRef.current[ib.id] = e;
@@ -295,7 +296,7 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
       e.position = Cesium.Cartesian3.fromDegrees(
         ib.position.lon,
         ib.position.lat,
-        0,
+        2000, // //* 반대 반구 비침 방지 — 생성 시와 동일 고도 유지
       );
       e.billboard.color = ibStatusColor(ib.status);
       // heading: 직전 위치와의 bearing — 정지 시(같은 위치) 이전 rotation 유지
