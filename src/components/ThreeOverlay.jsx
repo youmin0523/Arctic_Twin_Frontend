@@ -29,10 +29,14 @@ const MAX_LOCAL_ICEBERGS = 180;
 const SHIP_BASE_Y = 5; // 선체 기본 수선 높이 (수면 위로 올리기)
 
 // ── 육지(해안선) 렌더 파라미터 ──
+// 씬 스케일: 1 unit ≈ 1.5 m. 셀 1개 ≈ 3704 units(5.5km). 멀리서도 보이도록
+// 실제 지형 수준 높이를 줘야 함(과거 11 units≈16m 는 16km 거리에서 ~1px 띠로 보임).
 const LAND_RES = 0.05; // 전역 마스크 해상도(°) — isLandGlobal 격자와 동일
 const LAND_RADIUS_DEG = 1.1; // 위도 기준 샘플 반경(화면 가시영역 + 이동 여유)
-const LAND_TOP = 11; // 수면 위 지면 높이 (해안선 실루엣)
-const LAND_BOTTOM = -8; // 수면 아래 바닥 (바다와 틈새 방지)
+const LAND_COAST_H = 40; // 해안 저지 기본 높이(units, ~60m)
+const LAND_HILL_H = 30; // 육지 이웃 1개당 가산(내륙으로 갈수록 고지)
+const LAND_NOISE_H = 34; // 셀별 결정적 기복(자연스러운 능선)
+const LAND_BOTTOM = -10; // 수면 아래 바닥(바다와 틈새 방지)
 const LAND_SCENE_SCALE = 1.5; // 선박 좌표계와 동일한 압축비
 const LAND_REBUILD_DEG = 0.35; // 이 거리(°≈39km) 이상 이동 시 주변 육지 재생성
 
@@ -1245,8 +1249,14 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         ctx.current.landGroup = null;
       }
 
-      // 마스크 미로드 시 육지 없이 종료 — 로드 완료 후 재호출됨
-      if (!isGlobalLandMaskReady()) return;
+      // 마스크 미로드 시 육지 없이 종료 — 로드 완료 후 재호출됨(1회 경고)
+      if (!isGlobalLandMaskReady()) {
+        if (!ctx.current._landMaskWarned) {
+          ctx.current._landMaskWarned = true;
+          console.warn('[land] 전역 마스크 미로드 — 육지 렌더 대기(로드 완료 후 자동 빌드)');
+        }
+        return;
+      }
 
       // 패치 원점 = 선박 현재 scene 위치(없으면 0,0). 셀은 선박 기준 미터 오프셋으로 배치.
       const ship = ctx.current.shipGroup3;
@@ -1274,7 +1284,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       const latAt = (j) => lat0 + j * LAND_RES;
       const lonAt = (i) => lon0 + i * LAND_RES;
 
-      // 1) 육지 여부 격자 채우기
+      // 1) 육지 여부 + 셀별 고도(해안 저지 → 내륙 고지, 자연 기복)
       const isL = new Uint8Array(nLat * nLon);
       for (let j = 0; j < nLat; j++) {
         const la = latAt(j);
@@ -1285,8 +1295,29 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       }
       const cellAt = (j, i) =>
         j < 0 || j >= nLat || i < 0 || i >= nLon ? 0 : isL[j * nLon + i];
+      // 결정적 의사난수(재빌드 시 높이 안정 — Math.random 미사용)
+      const hash = (i, j) => {
+        const s = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+        return s - Math.floor(s); // 0..1
+      };
+      // 고도: 해안 기본 + (육지 이웃 수 × 가산) + 셀 기복 → 안쪽일수록 높음
+      const H = new Float32Array(nLat * nLon);
+      for (let j = 0; j < nLat; j++) {
+        for (let i = 0; i < nLon; i++) {
+          if (!isL[j * nLon + i]) continue;
+          const nb =
+            cellAt(j + 1, i) + cellAt(j - 1, i) + cellAt(j, i + 1) + cellAt(j, i - 1);
+          H[j * nLon + i] =
+            LAND_COAST_H + nb * LAND_HILL_H + hash(i, j) * LAND_NOISE_H;
+        }
+      }
+      // 이웃 바닥높이: 육지면 그 고도, 바다/패치밖이면 수면 아래(LAND_BOTTOM)
+      const floorAt = (j, i) =>
+        j < 0 || j >= nLat || i < 0 || i >= nLon
+          ? LAND_BOTTOM
+          : isL[j * nLon + i] ? H[j * nLon + i] : LAND_BOTTOM;
 
-      // 2) 메쉬 생성: 육지 셀 윗면 + 물과 접한 가장자리에만 측벽(해안 절벽)
+      // 2) 메쉬: 셀 윗면 + 이웃보다 높은 변에 측벽(바다/낮은 육지 모두 → 입체 지형)
       const positions = [];
       const normals = [];
       const colors = [];
@@ -1302,9 +1333,13 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         pushTri(p0, p1, p2, n, col);
         pushTri(p0, p2, p3, n, col);
       };
-      const TOP = [0.27, 0.4, 0.24]; // 해안 지면(녹색)
-      const HI = [0.42, 0.5, 0.33]; // 내륙 고지(밝은 카키)
-      const CLIFF = [0.3, 0.32, 0.26]; // 해안 절벽(어두운 톤)
+      // 고도별 색: 저지 녹색 → 구릉 카키 → 산지 회녹 → 설선 설백(북극감)
+      const colorFor = (h) =>
+        h < 70 ? [0.24, 0.38, 0.22]
+          : h < 120 ? [0.4, 0.44, 0.3]
+            : h < 165 ? [0.62, 0.64, 0.58]
+              : [0.86, 0.89, 0.92];
+      const CLIFF = [0.26, 0.28, 0.24]; // 절벽/측벽(어두운 톤)
       const UP = { x: 0, y: 1, z: 0 };
 
       for (let j = 0; j < nLat; j++) {
@@ -1313,70 +1348,54 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         for (let i = 0; i < nLon; i++) {
           if (!isL[j * nLon + i]) continue;
           const lo = lonAt(i);
+          const h = H[j * nLon + i];
           const c00 = ll(la - half, lo - half);
           const c10 = ll(la - half, lo + half);
           const c11 = ll(la + half, lo + half);
           const c01 = ll(la + half, lo - half);
-          const inland =
-            cellAt(j + 1, i) &&
-            cellAt(j - 1, i) &&
-            cellAt(j, i + 1) &&
-            cellAt(j, i - 1);
-          const topCol = inland ? HI : TOP;
           // 윗면
           pushQuad(
-            { x: c00.x, y: LAND_TOP, z: c00.z },
-            { x: c10.x, y: LAND_TOP, z: c10.z },
-            { x: c11.x, y: LAND_TOP, z: c11.z },
-            { x: c01.x, y: LAND_TOP, z: c01.z },
+            { x: c00.x, y: h, z: c00.z },
+            { x: c10.x, y: h, z: c10.z },
+            { x: c11.x, y: h, z: c11.z },
+            { x: c01.x, y: h, z: c01.z },
             UP,
-            topCol,
+            colorFor(h),
           );
-          // 물과 접한 변에만 측벽
-          if (!cellAt(j, i + 1)) {
-            pushQuad(
-              { x: c10.x, y: LAND_TOP, z: c10.z },
-              { x: c11.x, y: LAND_TOP, z: c11.z },
-              { x: c11.x, y: LAND_BOTTOM, z: c11.z },
-              { x: c10.x, y: LAND_BOTTOM, z: c10.z },
-              { x: 1, y: 0, z: 0 },
-              CLIFF,
-            );
-          }
-          if (!cellAt(j, i - 1)) {
-            pushQuad(
-              { x: c01.x, y: LAND_TOP, z: c01.z },
-              { x: c00.x, y: LAND_TOP, z: c00.z },
-              { x: c00.x, y: LAND_BOTTOM, z: c00.z },
-              { x: c01.x, y: LAND_BOTTOM, z: c01.z },
-              { x: -1, y: 0, z: 0 },
-              CLIFF,
-            );
-          }
-          if (!cellAt(j + 1, i)) {
-            pushQuad(
-              { x: c11.x, y: LAND_TOP, z: c11.z },
-              { x: c01.x, y: LAND_TOP, z: c01.z },
-              { x: c01.x, y: LAND_BOTTOM, z: c01.z },
-              { x: c11.x, y: LAND_BOTTOM, z: c11.z },
-              { x: 0, y: 0, z: -1 },
-              CLIFF,
-            );
-          }
-          if (!cellAt(j - 1, i)) {
-            pushQuad(
-              { x: c00.x, y: LAND_TOP, z: c00.z },
-              { x: c10.x, y: LAND_TOP, z: c10.z },
-              { x: c10.x, y: LAND_BOTTOM, z: c10.z },
-              { x: c00.x, y: LAND_BOTTOM, z: c00.z },
-              { x: 0, y: 0, z: 1 },
-              CLIFF,
-            );
-          }
+          // 각 변: 이웃이 더 낮으면 그 차이만큼 측벽(coastal cliff/terrace)
+          let nh;
+          nh = floorAt(j, i + 1); // +lon (east)
+          if (nh < h) pushQuad(
+            { x: c10.x, y: h, z: c10.z }, { x: c11.x, y: h, z: c11.z },
+            { x: c11.x, y: nh, z: c11.z }, { x: c10.x, y: nh, z: c10.z },
+            { x: 1, y: 0, z: 0 }, CLIFF,
+          );
+          nh = floorAt(j, i - 1); // -lon (west)
+          if (nh < h) pushQuad(
+            { x: c01.x, y: h, z: c01.z }, { x: c00.x, y: h, z: c00.z },
+            { x: c00.x, y: nh, z: c00.z }, { x: c01.x, y: nh, z: c01.z },
+            { x: -1, y: 0, z: 0 }, CLIFF,
+          );
+          nh = floorAt(j + 1, i); // +lat (north)
+          if (nh < h) pushQuad(
+            { x: c11.x, y: h, z: c11.z }, { x: c01.x, y: h, z: c01.z },
+            { x: c01.x, y: nh, z: c01.z }, { x: c11.x, y: nh, z: c11.z },
+            { x: 0, y: 0, z: -1 }, CLIFF,
+          );
+          nh = floorAt(j - 1, i); // -lat (south)
+          if (nh < h) pushQuad(
+            { x: c00.x, y: h, z: c00.z }, { x: c10.x, y: h, z: c10.z },
+            { x: c10.x, y: nh, z: c10.z }, { x: c00.x, y: nh, z: c00.z },
+            { x: 0, y: 0, z: 1 }, CLIFF,
+          );
         }
       }
 
       if (positions.length === 0) return; // 주변이 전부 바다 → 육지 없음
+      // 진단: 육지가 안 보이면 콘솔에서 빌드 여부/규모 확인
+      console.info(
+        `[land] center=${centerLat.toFixed(2)},${centerLon.toFixed(2)} tris=${positions.length / 9}`,
+      );
 
       const geo = trackDisposable(new THREE.BufferGeometry());
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
