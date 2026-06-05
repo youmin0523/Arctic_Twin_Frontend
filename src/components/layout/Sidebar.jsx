@@ -148,9 +148,16 @@ export default function Sidebar({
                 type="checkbox"
                 className="dt-sidebar__checkbox"
                 checked={routeVisibility[r.key] || false}
-                onChange={e => onRouteVisibilityChange(r.key, e.target.checked)}
+                onChange={e => {
+                  onRouteVisibilityChange(r.key, e.target.checked);
+                  // 체크박스를 켜면 그 항로를 활성 항로로도 설정 → 우측 자동항해/
+                  // 시뮬레이션(currentRouteKey 기반)에 즉시 반영. OFF·Select All은
+                  // 활성 항로를 바꾸지 않는다 (Select All은 onRouteVisibilityChange
+                  // 를 직접 호출하므로 이 onChange를 거치지 않음).
+                  if (e.target.checked && onRouteChange) onRouteChange(r.key);
+                }}
                 onClick={e => e.stopPropagation()}
-                title="항로 표시 토글"
+                title="항로 표시 토글 (켜면 활성 항로로 설정)"
               />
               <span className="dt-sidebar__route-bar" style={{ background: r.color }} />
               <span
