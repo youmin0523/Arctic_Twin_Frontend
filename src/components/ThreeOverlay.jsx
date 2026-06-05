@@ -11,6 +11,8 @@ import { getSeaState } from '../services/shipSimulator';
 // 회피 로직이 쓰는 전역 0.05° 육지 마스크(섬·내륙 포함)를 그대로 샘플링하여
 // 선미추적 뷰의 실제 해안선을 그린다 → 회피 경계와 시각이 100% 일치.
 import { isLandGlobal, isGlobalLandMaskReady } from '../services/landMaskGlobal';
+// 실사 지형(1단계): 실제 위성 이미지 드레이프
+import { loadImageryAround } from '../services/realTerrain';
 // ── Constants ────────────────────────────────────────────────────────────────
 const MOUSE_SENS = 0.0004;
 const MAX_ROT = 0.03;
@@ -1235,16 +1237,19 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
   // 원점으로 배치 → 장거리 항해의 투영 누적오차 없이 육지가 항상 배 밑에 정확히 옴.
   // 선박이 LAND_REBUILD_DEG 이상 이동하면 위 effect가 본 함수를 재호출(재중심화).
   const buildLandMasses = useCallback(
-    (centerLat, centerLon) => {
+    (centerLat, centerLon, imagery = null) => {
       const { scene } = ctx.current;
       if (!scene) return;
 
-      // 이전 육지 정리 (재빌드 시 메모리 누수 방지)
+      // 이전 육지 정리 (재빌드 시 메모리 누수 방지 — 텍스처 포함)
       if (ctx.current.landGroup) {
         scene.remove(ctx.current.landGroup);
         ctx.current.landGroup.traverse((o) => {
           if (o.geometry) o.geometry.dispose();
-          if (o.material) o.material.dispose();
+          if (o.material) {
+            if (o.material.map) o.material.map.dispose();
+            o.material.dispose();
+          }
         });
         ctx.current.landGroup = null;
       }
@@ -1317,29 +1322,42 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
           ? LAND_BOTTOM
           : isL[j * nLon + i] ? H[j * nLon + i] : LAND_BOTTOM;
 
-      // 2) 메쉬: 셀 윗면 + 이웃보다 높은 변에 측벽(바다/낮은 육지 모두 → 입체 지형)
+      // 2) 메쉬: 셀 윗면 + 이웃보다 높은 변에 측벽. imagery 있으면 실제 위성 UV 입힘.
       const positions = [];
       const normals = [];
       const colors = [];
+      const uvs = [];
       const half = LAND_RES / 2;
+      const uvOf = imagery ? imagery.uvOf : null;
+      // 정점 = {x,y,z, lat,lon}(UV 계산용)
+      const V = (lat, lon, y) => {
+        const p = ll(lat, lon);
+        return { x: p.x, y, z: p.z, lat, lon };
+      };
       const pushTri = (a, b, c, n, col) => {
         positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-        for (let k = 0; k < 3; k++) {
+        for (const p of [a, b, c]) {
           normals.push(n.x, n.y, n.z);
           colors.push(col[0], col[1], col[2]);
+          if (uvOf) {
+            const uv = uvOf(p.lat, p.lon);
+            uvs.push(uv[0], uv[1]);
+          } else uvs.push(0, 0);
         }
       };
       const pushQuad = (p0, p1, p2, p3, n, col) => {
         pushTri(p0, p1, p2, n, col);
         pushTri(p0, p2, p3, n, col);
       };
-      // 고도별 색(바다=청색과 대비되게 밝고 따뜻하게): 저지 올리브 → 구릉 녹색 → 산지 황갈 → 설선 설백
+      // 고도별 색(폴백): 저지 올리브 → 구릉 녹색 → 산지 황갈 → 설선 설백
       const colorFor = (h) =>
         h < 70 ? [0.46, 0.5, 0.3]
           : h < 120 ? [0.38, 0.54, 0.28]
             : h < 165 ? [0.58, 0.56, 0.46]
               : [0.95, 0.97, 1.0];
-      const CLIFF = [0.33, 0.3, 0.23]; // 절벽/측벽 — 어두운 흙색(음영·입체감)
+      // imagery 면: 윗면=흰색(위성 그대로), 측벽=약간 어둡게(음영). 폴백: 고도색/흙색.
+      const topColFor = (h) => (imagery ? [1, 1, 1] : colorFor(h));
+      const CLIFF = imagery ? [0.6, 0.56, 0.5] : [0.33, 0.3, 0.23];
       const UP = { x: 0, y: 1, z: 0 };
 
       for (let j = 0; j < nLat; j++) {
@@ -1349,43 +1367,32 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
           if (!isL[j * nLon + i]) continue;
           const lo = lonAt(i);
           const h = H[j * nLon + i];
-          const c00 = ll(la - half, lo - half);
-          const c10 = ll(la - half, lo + half);
-          const c11 = ll(la + half, lo + half);
-          const c01 = ll(la + half, lo - half);
-          // 윗면
+          const la0 = la - half, la1 = la + half, lo0 = lo - half, lo1 = lo + half;
+          // 윗면(법선 +y)
           pushQuad(
-            { x: c00.x, y: h, z: c00.z },
-            { x: c10.x, y: h, z: c10.z },
-            { x: c11.x, y: h, z: c11.z },
-            { x: c01.x, y: h, z: c01.z },
-            UP,
-            colorFor(h),
+            V(la0, lo0, h), V(la0, lo1, h), V(la1, lo1, h), V(la1, lo0, h),
+            UP, topColFor(h),
           );
           // 각 변: 이웃이 더 낮으면 그 차이만큼 측벽(coastal cliff/terrace)
           let nh;
           nh = floorAt(j, i + 1); // +lon (east)
           if (nh < h) pushQuad(
-            { x: c10.x, y: h, z: c10.z }, { x: c11.x, y: h, z: c11.z },
-            { x: c11.x, y: nh, z: c11.z }, { x: c10.x, y: nh, z: c10.z },
+            V(la0, lo1, h), V(la1, lo1, h), V(la1, lo1, nh), V(la0, lo1, nh),
             { x: 1, y: 0, z: 0 }, CLIFF,
           );
           nh = floorAt(j, i - 1); // -lon (west)
           if (nh < h) pushQuad(
-            { x: c01.x, y: h, z: c01.z }, { x: c00.x, y: h, z: c00.z },
-            { x: c00.x, y: nh, z: c00.z }, { x: c01.x, y: nh, z: c01.z },
+            V(la1, lo0, h), V(la0, lo0, h), V(la0, lo0, nh), V(la1, lo0, nh),
             { x: -1, y: 0, z: 0 }, CLIFF,
           );
           nh = floorAt(j + 1, i); // +lat (north)
           if (nh < h) pushQuad(
-            { x: c11.x, y: h, z: c11.z }, { x: c01.x, y: h, z: c01.z },
-            { x: c01.x, y: nh, z: c01.z }, { x: c11.x, y: nh, z: c11.z },
+            V(la1, lo1, h), V(la1, lo0, h), V(la1, lo0, nh), V(la1, lo1, nh),
             { x: 0, y: 0, z: -1 }, CLIFF,
           );
           nh = floorAt(j - 1, i); // -lat (south)
           if (nh < h) pushQuad(
-            { x: c00.x, y: h, z: c00.z }, { x: c10.x, y: h, z: c10.z },
-            { x: c10.x, y: nh, z: c10.z }, { x: c00.x, y: nh, z: c00.z },
+            V(la0, lo0, h), V(la0, lo1, h), V(la0, lo1, nh), V(la0, lo0, nh),
             { x: 0, y: 0, z: 1 }, CLIFF,
           );
         }
@@ -1401,6 +1408,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
       geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
       const mat = trackDisposable(
         new THREE.MeshStandardMaterial({
           vertexColors: true,
@@ -1409,9 +1417,11 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
           side: THREE.DoubleSide,
           // 안개 워시아웃 차단 — 바다(안개 유지)와 대비되어 먼 육지도 또렷이 구분됨.
           fog: false,
-          // 저조도/극야에도 육지가 검게 죽지 않도록 약한 자발광(중립 톤).
-          emissive: 0x2a2c26,
-          emissiveIntensity: 0.45,
+          // imagery 있으면 실제 위성 텍스처를 입힘(정점색 흰색과 곱). 없으면 고도색.
+          map: imagery ? imagery.texture : null,
+          // 저조도/극야 대비 약한 자발광. 위성 텍스처일 땐 더 약하게(원색 보존).
+          emissive: imagery ? 0x202020 : 0x2a2c26,
+          emissiveIntensity: imagery ? 0.18 : 0.45,
         }),
       );
       const landGroup = new THREE.Group();
@@ -2431,9 +2441,20 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         Math.abs(dLon) * cosLat > LAND_REBUILD_DEG;
       const needFirstReal = maskReady && !ctx.current.landBuiltReady;
       if (movedFar || needFirstReal) {
-        buildLandMasses(lat, lon);
+        buildLandMasses(lat, lon, null); // 즉시 표시(고도색 폴백)
         ctx.current.landCenter = { lat, lon };
         if (maskReady) ctx.current.landBuiltReady = true;
+        // 실제 위성 이미지 비동기 로드 후 텍스처 입혀 재빌드(최신 요청만 반영)
+        const token = (ctx.current.terrainToken = (ctx.current.terrainToken || 0) + 1);
+        const clat = lat;
+        const clon = lon;
+        loadImageryAround(clat, clon)
+          .then((imagery) => {
+            if (imagery && ctx.current.terrainToken === token && ctx.current.scene) {
+              buildLandMasses(clat, clon, imagery);
+            }
+          })
+          .catch(() => {});
       }
     }
   }, [shipState, mode, manualMode, buildLandMasses]);
