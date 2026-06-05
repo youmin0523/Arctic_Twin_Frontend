@@ -18,8 +18,9 @@ import { useEffect, useRef } from 'react';
 import * as Cesium from 'cesium';
 import { shipBillboardSize, shipScaleByDistance } from '../../services/shipScale';
 
-// 기본(아라온) 사전배치 좌표 — asset.home 미지정 시 폴백
-const ARAON_HOME = { lat: 71.0, lon: 179.5 };
+// 기본(아라온) 사전배치 좌표 — asset.home 미지정 시 폴백.
+// ESCORT_ASSETS.NSR.home(연안 71.7)과 일치 — 레거시 71.0 과 섞이면 2척 중복.
+const ARAON_HOME = { lat: 71.7, lon: 179.5 };
 
 // 기본 시각 특성 (asset.visual 미지정 시 = 아라온)
 const DEFAULT_VISUAL = {
@@ -31,7 +32,8 @@ const DEFAULT_VISUAL = {
 const hexCss = (v) => `#${(v >>> 0).toString(16).padStart(6, '0').slice(-6)}`;
 
 // 자산 특성(visual)에 맞춰 미니 쇄빙선 아이콘(top-down, 선수=위)을 그린다.
-function makeIcebreakerCanvas(visual) {
+// VoyagePlaybackLayer 도 동일 아이콘을 재사용하도록 export.
+export function makeIcebreakerCanvas(visual) {
   const V = visual || DEFAULT_VISUAL;
   const c = document.createElement('canvas');
   c.width = 64;

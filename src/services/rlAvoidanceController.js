@@ -155,6 +155,7 @@ function isDetourForward(path, startWp, endWp) {
  * @param {Function} options.getIceData      - () => {concentration, cells} | null
  * @param {Function} options.getWeather      - () => {visibility_km, wave_height_m}
  * @param {Function} options.getIceClass     - () => string (e.g., "PC5")
+ * @param {Function} options.getRoute        - () => string 활성 항로(NSR/NWP/TSR) — 항로별 RL 모델 선택
  * @param {Function} options.dispatch        - React dispatch 함수
  * @param {Function} options.showToast       - 토스트 메시지 표시 함수
  * @returns {Object} - {start, stop, isActive}
@@ -168,6 +169,7 @@ export function createRLAvoidanceController(options) {
     getIceData,
     getWeather,
     getIceClass,
+    getRoute,
     dispatch,
     showToast,
   } = options;
@@ -280,6 +282,7 @@ export function createRLAvoidanceController(options) {
         })),
         { concentration: iceData?.concentration || 0 },
         weather,
+        (getRoute && getRoute()) || 'NSR',
       );
 
       metrics.recordRLAttempt(rlResult.confidence);
