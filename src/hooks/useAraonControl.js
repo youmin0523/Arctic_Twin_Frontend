@@ -64,6 +64,14 @@ export const ESCORT_ASSETS = {
 // 하위호환: 기존 ARAON_HOME 참조는 NSR(아라온) 거점으로 유지
 export const ARAON_HOME = ESCORT_ASSETS.NSR.home; // Wrangel Island 북안
 
+// 백엔드 쇄빙선 id(trace) → 프론트 호위 자산. Voyage trace 렌더에서 항로별
+// 아이콘/시각 특성 매핑에 사용. (백엔드 FLEET_BY_ROUTE 와 동기화)
+export const ESCORT_ASSET_BY_IB_ID = {
+  'ib-araon': ESCORT_ASSETS.NSR,
+  'ib-ccgs': ESCORT_ASSETS.NWP,
+  'ib-rosatom': ESCORT_ASSETS.TSR,
+};
+
 const KN_TO_KMH = 1.852;
 const ESCORT_LEAD_KM = 25; // 에스코트 시 본선 앞 유지 간격
 const TRANSIT_THRESHOLD_KM = 150; // 본선과 이 거리 밖이면 '선도', 안이면 '호위'
@@ -242,6 +250,9 @@ export default function useAraonControl({
         } else {
           s.progress += s.progress < target ? stepProg : -stepProg;
         }
+        // 하한: 호위선은 본선 진행률 밑으로 떨어지지 않는다(뒤처짐 방지).
+        // 동속 자산(NWP CCGS=본선 15kn)이 lead 를 못 만들어 뒤로 끌려가던 문제 차단.
+        if (s.progress < shipProg) s.progress = shipProg;
         const p = routePos(s.progress, timed, wps);
         if (p) {
           if (p.lat !== prev.lat || p.lon !== prev.lon) s.heading = bearingDeg(prev, p);

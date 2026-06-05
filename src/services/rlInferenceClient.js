@@ -16,9 +16,10 @@ const INFER_TIMEOUT_MS = 3000;
  * @param {Array}  icebergs  - [{lat, lon, length_m}, ...]
  * @param {Object} iceData   - {concentration: number}
  * @param {Object} weather   - {visibility_km, wave_height_m}
+ * @param {string} route     - 활성 항로(NSR/NWP/TSR) — 항로별 학습 모델 선택
  * @returns {Promise<Object>} - {action, heading_delta, speed_factor, confidence, projected_path, fallback}
  */
-export async function rlInfer(shipState, icebergs, iceData, weather) {
+export async function rlInfer(shipState, icebergs, iceData, weather, route = 'NSR') {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), INFER_TIMEOUT_MS);
 
@@ -31,6 +32,7 @@ export async function rlInfer(shipState, icebergs, iceData, weather) {
         icebergs,
         ice_data: iceData,
         weather,
+        route,
       }),
       signal: controller.signal,
     });
