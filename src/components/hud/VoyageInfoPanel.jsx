@@ -248,8 +248,9 @@ export default function VoyageInfoPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
-        // 접힘: 우측으로 밀어 핸들(약 26px)만 남김. transition 으로 부드럽게.
-        transform: collapsed ? 'translateX(calc(100% - 26px))' : 'translateX(0)',
+        // 접힘: 패널 본체를 우측 화면 밖으로 완전히 밀어내고(우측 여백 10px 포함),
+        //       토글 탭(좌측 22px 핸들)만 화면 가장자리에 남김. transition 으로 부드럽게.
+        transform: collapsed ? 'translateX(calc(100% + 10px))' : 'translateX(0)',
         transition: 'transform 0.28s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
