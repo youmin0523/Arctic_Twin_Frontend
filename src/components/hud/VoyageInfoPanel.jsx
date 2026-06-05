@@ -116,6 +116,7 @@ export default function VoyageInfoPanel({
   sampleIceFn,
   araonDisplayPos, // App.jsx 에서 계산된 통합 아라온 위치 (Cesium marker 와 동일)
   araonControl, // Live 모드 수동 호출/복귀: { mode, onCall, onRecall } | null
+  escortAsset, // 현재 항로의 호위 자산 { name, org, flag, homeName } | null
   onClose,
 }) {
   // 패널 접기/펼치기 — 우측으로 접으면 핸들만 남고, 다시 누르면 좌측으로 펼침
@@ -172,7 +173,10 @@ export default function VoyageInfoPanel({
 
   // ── 아라온 ───────────────────────────────────────────────────
   const voyAraon = voyIbs.find((x) => x.id === 'ib-araon');
-  const araonMeta = ICEBREAKER_META['ib-araon'] || { name_ko: '아라온' };
+  // Live 모드: 현재 항로의 호위 자산명(escortAsset) 우선, 없으면 Voyage 메타(아라온)
+  const araonMeta = escortAsset
+    ? { name_ko: `${escortAsset.flag || ''} ${escortAsset.name}`.trim(), org: escortAsset.org }
+    : ICEBREAKER_META['ib-araon'] || { name_ko: '아라온' };
   let araon;
   if (isVoyage) {
     araon = voyAraon;
@@ -461,7 +465,7 @@ export default function VoyageInfoPanel({
                     color: araon.status === 'escorting' ? '#ef4444' : '#64748b',
                   }}
                 >
-                  {araonDisplayPos?.label || (araon.status === 'escorting' ? '본선 호위 중' : 'Wrangel 정박')}
+                  {araonDisplayPos?.label || (araon.status === 'escorting' ? '본선 호위 중' : `${escortAsset?.homeName || 'Wrangel'} 정박`)}
                 </div>
               </>
             )}
