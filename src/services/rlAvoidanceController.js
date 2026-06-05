@@ -116,6 +116,35 @@ function isWaypointListSane(wps, originalWps) {
 }
 
 /**
+ * 디투어가 start→end 축을 따라 단조 전진하는지 검사.
+ * RL/A* 디투어가 끝점으로 되돌아오며 자기교차(스파이크)를 만드는 경우를 잡아낸다.
+ * 위경도 → 등거리 근사를 위해 경도차에 cos(lat) 보정을 적용한다.
+ *
+ * @param {Array} path     - 디투어 웨이포인트(시작·끝 연결점 포함)
+ * @param {Object} startWp - 시작 연결점 {lon, lat}
+ * @param {Object} endWp   - 끝 연결점 {lon, lat}
+ * @returns {boolean} 단조 전진이면 true (허용오차 내 후퇴는 통과)
+ */
+function isDetourForward(path, startWp, endWp) {
+  if (!Array.isArray(path) || path.length < 2) return false;
+  const cosLat = Math.cos((startWp.lat * Math.PI) / 180);
+  const ax = (endWp.lon - startWp.lon) * cosLat;
+  const ay = endWp.lat - startWp.lat;
+  const axisLen2 = ax * ax + ay * ay;
+  if (axisLen2 < 1e-9) return true; // start≈end → 축 검사 무의미
+  const BACKTRACK_TOL = 0.15; // 축 길이의 15%까지 후퇴 허용
+  let maxProj = -Infinity;
+  for (const p of path) {
+    if (!p || !Number.isFinite(p.lon) || !Number.isFinite(p.lat)) return false;
+    const proj =
+      ((p.lon - startWp.lon) * cosLat * ax + (p.lat - startWp.lat) * ay) / axisLen2;
+    if (proj < maxProj - BACKTRACK_TOL) return false;
+    if (proj > maxProj) maxProj = proj;
+  }
+  return true;
+}
+
+/**
  * RL 회피 컨트롤러 생성.
  *
  * @param {Object} options
@@ -268,21 +297,41 @@ export function createRLAvoidanceController(options) {
         method = 'RL';
         const margin = 5;
         const insertStart = Math.max(0, dangerIdx - margin);
-        const insertEnd = Math.min(wps.length - 1, dangerIdx + margin);
+
+        // 디투어 끝점은 고정 margin 이 아니라 RL 경로 끝점(~70km 전방)에 가장 가까운
+        // "전방" 항로 웨이포인트로 동적 선택한다. 고정 margin 으로 끝점을 잡으면
+        // RL 경로 길이와 항로 구간 길이가 어긋나(연안에선 항로 간격이 촘촘) 디투어가
+        // 끝점으로 되돌아오며 자기교차 스파이크를 만든다.
+        const rlPath = rlResult.projected_path;
+        const rlEnd = rlPath[rlPath.length - 1];
+        let insertEnd = Math.min(wps.length - 1, insertStart + 1);
+        let bestEndD = Infinity;
+        for (let i = insertStart + 1; i < wps.length; i++) {
+          const d = approxDistKm(rlEnd.lat, rlEnd.lon, wps[i].lat, wps[i].lon);
+          if (d < bestEndD) { bestEndD = d; insertEnd = i; }
+          else if (d > bestEndD + 50) break; // 최근접점을 지나 충분히 멀어지면 중단
+        }
+
         const startWp = wps[insertStart];
         const endWp = wps[insertEnd];
 
         const detourWps = rlPositionsToWaypoints(
-          rlResult.projected_path.map((p) => [p.lon, p.lat]),
+          rlPath.map((p) => [p.lon, p.lat]),
           startWp,
           endWp,
         );
 
-        const merged = mergeDetourSmooth(
-          wps, detourWps, progress, insertStart, insertEnd,
-        );
-        newWaypoints = merged.newWaypoints;
-        newProgress = merged.newProgress;
+        // 역주행 가드: 디투어가 start→end 축으로 단조 전진하지 않으면(되돌아오는
+        // 스파이크) 채택하지 않고 아래 A* 폴백으로 넘긴다.
+        if (isDetourForward(detourWps, startWp, endWp)) {
+          const merged = mergeDetourSmooth(
+            wps, detourWps, progress, insertStart, insertEnd,
+          );
+          newWaypoints = merged.newWaypoints;
+          newProgress = merged.newProgress;
+        } else {
+          console.warn('[RL] 디투어 역주행 감지 — RL 거부, 폴백 시도');
+        }
       }
 
       // ── 2차: 위협 유형별 A* 폴백 (RL 실패/거부 시) ──
