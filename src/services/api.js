@@ -54,9 +54,14 @@ export async function evaluateRoute(route, vessel, month) {
 }
 
 /**
- * Fetch real-time NSR weather data (파고·기온·가시거리).
- * Populated by weather_fetcher.py via Open-Meteo API.
- * @returns {Promise<Object>} Weather data { fetched_at, waypoints, route_summary }
+ * Fetch real-time NSR weather data (파고·기온·가시거리·바람).
+ * Populated by weather_fetcher.py via Open-Meteo (Marine + Forecast) + Copernicus fallback.
+ * @returns {Promise<Object>} Weather data, shape:
+ *   { fetched_at, source, routes: { [KEY]: { waypoints: [{
+ *       lat, lon, name, wave_height_m, wave_direction_deg, wave_period_s,
+ *       temperature_c, visibility_km, sst_c,
+ *       wind_speed_ms, wind_direction_deg, wind_gust_ms
+ *     }], route_summary } }, route_summary }
  */
 export async function fetchWeather() {
   const res = await fetch(`${API_BASE}/weather/latest`);

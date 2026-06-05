@@ -18,6 +18,7 @@ import {
   isGlobalLandMaskReady,
   initGlobalLandMask,
   isLandGlobal,
+  inNavigableCorridor,
 } from './landMaskGlobal';
 import { RL_CONTROLLER_CONFIG } from '../data/rlConfig';
 import { createAvoidanceMetrics } from './avoidanceMetrics';
@@ -76,7 +77,8 @@ function isProjectedPathSane(path, ship) {
 function rlProjectedHitsLand(path) {
   if (!Array.isArray(path) || !isGlobalLandMaskReady()) return false;
   for (const p of path) {
-    if (p && Number.isFinite(p.lat) && Number.isFinite(p.lon) && isLandGlobal(p.lat, p.lon)) {
+    if (p && Number.isFinite(p.lat) && Number.isFinite(p.lon) &&
+        isLandGlobal(p.lat, p.lon) && !inNavigableCorridor(p.lat, p.lon)) {
       return true;
     }
   }

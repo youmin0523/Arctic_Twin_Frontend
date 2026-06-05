@@ -10,6 +10,7 @@
 
 let packed = null;
 let META = null;
+let CORRIDORS = { boxes: [], lanes: [] }; // 통항 가능 해협/운하 화이트리스트
 
 export function isGlobalLandMaskReady() {
   return packed !== null;
@@ -26,12 +27,51 @@ export async function initGlobalLandMask() {
     META = await metaRes.json();
     packed = new Uint8Array(await binRes.arrayBuffer());
     console.log(`[landMaskGlobal] 전역 마스크 로드 (${META.cols}×${META.rows}, ${META.res}°, ${(packed.length / 1e6).toFixed(2)}MB)`);
+    // 통항회랑(좁은 해협·운하)도 함께 로드 — 실패해도 마스크는 사용 가능.
+    try {
+      const corrRes = await fetch('/data/navigableCorridors.json');
+      if (corrRes.ok) {
+        const c = await corrRes.json();
+        CORRIDORS = { boxes: c.boxes || [], lanes: c.lanes || [] };
+        console.log(`[landMaskGlobal] 통항회랑 로드 (box ${CORRIDORS.boxes.length}, lane ${CORRIDORS.lanes.length})`);
+      }
+    } catch (_) { /* 회랑 없음 — 면제 없이 동작 */ }
     return true;
   } catch (e) {
     console.warn('[landMaskGlobal] 로드 실패 — 전역 육지 회피 비활성화:', e.message);
     packed = null;
     return false;
   }
+}
+
+const _DEG_KM = 111.32;
+function _distToSegKm(plat, plon, alon, alat, blon, blat) {
+  const k = Math.cos(plat * Math.PI / 180);
+  const ax = alon * k, ay = alat, bx = blon * k, by = blat, px = plon * k, py = plat;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy) * _DEG_KM;
+}
+
+/**
+ * 좌표가 통항회랑(0.05° 마스크가 좁아 '육지'로 닫지만 실제 통항 가능한
+ * 해협·운하: 수에즈·바브엘만데브·순다·싱가포르·지브롤터·도버 등) 안인지.
+ * 육지 판정 결과를 면제할 때 사용. (마스크상 육지여도 이 안이면 통항 허용)
+ */
+export function inNavigableCorridor(lat, lon) {
+  for (const b of CORRIDORS.boxes) {
+    if (lat >= b.latMin && lat <= b.latMax && lon >= b.lonMin && lon <= b.lonMax) return true;
+  }
+  for (const ln of CORRIDORS.lanes) {
+    const pts = ln.points;
+    for (let i = 1; i < pts.length; i++) {
+      if (_distToSegKm(lat, lon, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) <= ln.bufferKm) return true;
+    }
+  }
+  return false;
 }
 
 function cellLand(col, row) {
@@ -67,7 +107,10 @@ export function landAheadGlobal(lat, lon, heading, lookAheadKm = 90, stepKm = 6)
   for (let d = stepKm; d <= lookAheadKm; d += stepKm) {
     const cLat = lat + (Math.cos(hdg) * d) / DEG_TO_KM;
     const cLon = wrapLon(lon + (Math.sin(hdg) * d) / (DEG_TO_KM * cosLat));
-    if (isLandGlobal(cLat, cLon)) return { blocked: true, distanceKm: d };
+    // 통항회랑(좁은 해협·운하)은 마스크상 육지여도 통항 가능 → 위협으로 보지 않음
+    if (isLandGlobal(cLat, cLon) && !inNavigableCorridor(cLat, cLon)) {
+      return { blocked: true, distanceKm: d };
+    }
   }
   return { blocked: false, distanceKm: Infinity };
 }

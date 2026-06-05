@@ -162,8 +162,15 @@ function IceWeatherPanel({ hud }) {
   const sicNum = parseFloat(hud.sic) || 0;
   const rfiNum = parseFloat(hud.rfi) || 0;
   const rioLevel = sicNum < 15 ? 'safe' : sicNum < 40 ? 'warning' : 'danger';
-  const windSpeed = (parseFloat(hud.hs) * 3.2 + 1.5).toFixed(1);
-  const windDir = Math.round(180 + Math.random() * 60);
+  // 풍속/풍향: 실측 바람(Open-Meteo Forecast 10m)이 hud에 있으면 사용,
+  // 없으면 파고 기반 결정적 추정값으로 폴백(라벨에 "(추정)" 표기).
+  const windIsReal = hud.windSpeedMs != null;
+  const windSpeed = windIsReal
+    ? Number(hud.windSpeedMs).toFixed(1)
+    : (parseFloat(hud.hs) * 3.2 + 1.5).toFixed(1);
+  const windDir = hud.windDirDeg != null
+    ? Math.round(((hud.windDirDeg % 360) + 360) % 360)
+    : Math.round((180 + parseFloat(hud.hs || 0) * 12) % 360);
 
   return (
     <div className="bp-content" style={{ justifyContent: 'space-between', gap: 6 }}>
@@ -199,8 +206,8 @@ function IceWeatherPanel({ hud }) {
       <div className="bp-info-stack" style={{ flex: '0 1 auto', minWidth: 0 }}>
         <DataRow label="파고 Hs" value={hud.hs} />
         <DataRow label="가시거리" value={hud.vis} />
-        <DataRow label="풍속" value={windSpeed + ' m/s'} />
-        <DataRow label="풍향" value={windDir + '°'} />
+        <DataRow label={windIsReal ? '풍속' : '풍속(추정)'} value={windSpeed + ' m/s'} />
+        <DataRow label={windIsReal ? '풍향' : '풍향(추정)'} value={windDir + '°'} />
         <DataRow label="수온" value={hud.temp} />
         <DataRow label="Roll / Pitch" value={`${hud.roll} / ${hud.pitch}`} />
       </div>
@@ -499,7 +506,7 @@ function EvalTooltipPortal({ anchorRect, evaluationResult }) {
 }
 
 /* ── Tab 3: Ship Service Info ── */
-function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon }) {
+function ServiceInfoPanel({ hud, shipHeading, currentRoute, evaluationResult, specs, araon }) {
   // //* [Modified Code] Portal 툴팁 상태 관리
   const [tooltipRect, setTooltipRect] = useState(null);
 
@@ -517,15 +524,22 @@ function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon })
   const handleBadgeLeave = useCallback(() => setTooltipRect(null), []);
 
   // ── 선종 매핑 (shipSpecs.type → API vessel_type) ────────────
-  const vesselTypeMap = { bulk: 'bulk', lng_tanker: 'lng', container: 'container' };
-  const iceClassCodeMap = { PC2: 2, PC3: 3, PC4: 4, PC5: 5, PC6: 6, PC7: 7, NONE: 0 };
+  const vesselTypeMap = { bulk: 'bulk', lng: 'lng', container: 'container' };
+  // 빙급 → 코드. PC 등급 + IACS Polar Arc 등급(Arc4~Arc9)을 PC 등가로 매핑.
+  const iceClassCodeMap = {
+    PC2: 2, PC3: 3, PC4: 4, PC5: 5, PC6: 6, PC7: 7, NONE: 0,
+    Arc9: 3, Arc7: 4, Arc6: 5, Arc5: 6, Arc4: 7,
+  };
   // 선종별 기본 엔진 출력 (kW)
-  const defaultEnginePower = { bulk: 18000, lng_tanker: 37000, container: 28000 };
+  const defaultEnginePower = { bulk: 18000, lng: 37000, container: 28000 };
 
   // NSR 항로 거리 (해리) — ai-pipeline/config.py 기준
   const routeDistanceNm = { NSR: 7200, NWP: 8100, TSR: 6600 };
 
   // ── ML 연료 비교 API 호출 ──────────────────────────────────
+  // hud.sic는 항해 재생 중 매 프레임 갱신되므로, 5% 단위로 양자화해
+  // 미세 변화로 API가 끊임없이 재호출(→ "분석 중" 깜빡임)되는 것을 방지한다.
+  const sicBucket = Math.round((parseFloat(hud.sic) || 0) / 5) * 5;
   useEffect(() => {
     if (!specs) return;
     const arcticRoutes = ['NSR', 'NWP', 'TSR'];
@@ -534,14 +548,14 @@ function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon })
       return;
     }
 
+    let cancelled = false;
     const vtype = vesselTypeMap[specs.type] || 'container';
     const iceCode = iceClassCodeMap[specs.iceClass] || 0;
     const enginePower = defaultEnginePower[specs.type] || 28000;
     const nsrDist = routeDistanceNm[currentRoute] || 7200;
 
-    // 현재 SIC(빙하 농도)를 HUD에서 가져옴
-    const sicStr = hud.sic || '0%';
-    const sicVal = parseFloat(sicStr) / 100 || 0;
+    // 양자화된 SIC(빙하 농도) 버킷을 0~1 비율로 변환
+    const sicVal = sicBucket / 100;
     // 빙하 두께는 농도에 기반한 추정값
     const iceThickness = Math.min(3.0, 0.3 + 2.0 * Math.pow(sicVal, 1.5));
 
@@ -560,14 +574,19 @@ function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon })
       speed_knots: 14.0,
     })
       .then((data) => {
+        if (cancelled) return; // 더 최신 요청이 진행 중이면 무시
         setFuelData(data);
         setFuelLoading(false);
       })
       .catch((err) => {
+        if (cancelled) return;
         setFuelError(err.message);
         setFuelLoading(false);
       });
-  }, [specs?.type, specs?.displacement, specs?.draft, specs?.iceClass, currentRoute, hud.sic]);
+
+    // 의존성 변경/언마운트 시 진행 중 요청 결과를 폐기
+    return () => { cancelled = true; };
+  }, [specs?.type, specs?.displacement, specs?.draft, specs?.iceClass, currentRoute, sicBucket]);
 
   const allRoutes = [
     { name: 'NSR', dist: 7200, days: 14, cost: 280, co2: 1840, arctic: true },
@@ -642,7 +661,7 @@ function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon })
         <DataRow
           label="침로"
           value={
-            (parseFloat(hud.position?.split(',')[1]) || 0).toFixed(0) + '°T'
+            (((Number(shipHeading) || 0) % 360 + 360) % 360).toFixed(0) + '°T'
           }
         />
         <DataRow label="진행률" value={hud.progress} />
@@ -891,7 +910,8 @@ function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon })
           </div>
         </>
       )}
-      {fuelLoading && (
+      {/* 최초 로딩에서만 표시 — 데이터가 이미 있으면 백그라운드 갱신이므로 깜빡이지 않게 한다 */}
+      {fuelLoading && !fuelData && (
         <>
           <div className="bp-divider" />
           <div style={{ display: 'flex', alignItems: 'center', color: '#64748b', fontSize: '10px' }}>
@@ -906,6 +926,7 @@ function ServiceInfoPanel({ hud, currentRoute, evaluationResult, specs, araon })
 /* ── Main BottomPanel ── */
 export default function BottomPanel({
   hud,
+  shipHeading,
   specs,
   onSpecChange,
   onPresetLoad,
@@ -972,6 +993,7 @@ export default function BottomPanel({
           </div>
           <ServiceInfoPanel
             hud={hud}
+            shipHeading={shipHeading}
             currentRoute={currentRoute}
             evaluationResult={evaluationResult}
             specs={specs}

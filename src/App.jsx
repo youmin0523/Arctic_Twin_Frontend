@@ -64,7 +64,7 @@ function estimateVisibility(lat) {
   return 15.0;                // 연안·온대 해역
 }
 import { evaluateRouting, deriveIceConditions } from './services/polarisRIO';
-import { generateRoute, isSameRegion } from './services/routeGenerator';
+import { generateRoute, isSameRegion, avoidLandGlobal } from './services/routeGenerator';
 import {
   checkRouteAhead,
   rerouteAroundIceberg,
@@ -828,6 +828,22 @@ function AppInner() {
       state.departurePort === 'BUSAN' &&
       state.arrivalPort === 'ROTTERDAM'
     ) {
+      // 기본 조합: 중·저위도 항로(SUEZ/CAPE)는 정적 육지회피(avoidLandGlobal,
+      // 통항회랑 인지)를 1회 적용해 표시·시뮬 경로를 해상 정합화한다(안전망).
+      // 검증된 데이터라 보통 무변화지만, 마스크 갱신 등으로 연안 클리핑이 생기면 보정.
+      // 북극 항로(NSR/NWP/TSR)는 검증된 원본 + 전용 A* 흐름을 유지(원본 사용).
+      if (state.currentRouteKey === 'SUEZ' || state.currentRouteKey === 'CAPE') {
+        let cancelledDefault = false;
+        (async () => {
+          try {
+            const wps = await avoidLandGlobal(ROUTES[state.currentRouteKey]);
+            if (!cancelledDefault && wps && wps.length > 1) {
+              dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: wps });
+            }
+          } catch (_) { /* 실패 시 원본(raw ROUTES) 폴백 — activeWaypoints 기본값 */ }
+        })();
+        return () => { cancelledDefault = true; };
+      }
       if (state.generatedWaypoints) {
         dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
       }
@@ -2911,8 +2927,10 @@ function AppInner() {
   const ARCTIC_ROUTE_KEYS = ['NSR', 'NWP', 'TSR'];
   const isArcticRoute = ARCTIC_ROUTE_KEYS.includes(state.currentRouteKey);
 
+  // A안: 아라온(Wrangel 사전배치 북극 호위 자산)은 북극 항로(NSR/NWP/TSR)에서만
+  // 노출·운용. SUEZ/CAPE/ETC 같은 비-북극 항로에선 표시하지 않는다(부산 끝점 스냅 현상 차단).
   let araonDisplayPos = null;
-  if (voyageActive && voyage.trace) {
+  if (isArcticRoute && voyageActive && voyage.trace) {
     const ibs = sampleIcebreakersAt(voyage.trace, voyage.tHours);
     const a = ibs.find((x) => x.id === 'ib-araon');
     if (a) {
@@ -2945,18 +2963,16 @@ function AppInner() {
         heading: aHdg,
       };
     }
-  } else if (!voyageActive) {
-    // Live 모드: 독립 아라온 에이전트(useAraonControl)가 호출/복귀로 자체 운항.
-    // 표시 조건: 호출됨(active/returning) 이거나 북극 항로(대기 마커 노출).
-    if (liveAraon.mode !== 'idle' || isArcticRoute) {
-      araonDisplayPos = {
-        lat: liveAraon.lat,
-        lon: liveAraon.lon,
-        status: liveAraon.status,
-        label: liveAraon.label,
-        heading: liveAraon.heading,
-      };
-    }
+  } else if (isArcticRoute && !voyageActive) {
+    // Live 모드(북극 항로): 독립 아라온 에이전트(useAraonControl)가 호출/복귀로
+    // 자체 운항. 대기(Wrangel)·호위 모두 표시. 비-북극 항로는 위 가드로 제외됨.
+    araonDisplayPos = {
+      lat: liveAraon.lat,
+      lon: liveAraon.lon,
+      status: liveAraon.status,
+      label: liveAraon.label,
+      heading: liveAraon.heading,
+    };
   }
   // 표시 안 함 → araonDisplayPos=null → AraonLiveMarker 가 entity 미생성/제거
 
@@ -3228,7 +3244,7 @@ function AppInner() {
               sampleIceFn={sampleIceFn}
               araonDisplayPos={araonDisplayPos}
               araonControl={
-                !voyageActive
+                !voyageActive && isArcticRoute
                   ? {
                       mode: liveAraon.mode,
                       onCall: callAraon,

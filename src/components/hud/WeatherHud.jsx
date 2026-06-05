@@ -11,7 +11,7 @@ import React, { useMemo } from 'react';
  *   currentRouteKey - 'NSR' | 'NWP' | 'TSR' | 'SUEZ' | 'CAPE'
  *   isMouseMode    - true면 마우스 탐색 모드 (출항 전)
  */
-export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMouseMode }) {
+export default function WeatherHud({ shipPos, weatherData, weatherError, currentRouteKey, isMouseMode }) {
   const nearest = useMemo(() => {
     const routes = weatherData?.routes;
     if (!routes) return null;
@@ -53,6 +53,14 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
   const vis = nearest?.visibility_km ?? fallbackVis;
   const temp = nearest?.temperature_c ?? fallbackTemp;
   const sst = nearest?.sst_c ?? null;
+  // 실측 바람 (Open-Meteo Forecast 10m). 없으면 파고 기반 추정으로 폴백.
+  const windSpeed = nearest?.wind_speed_ms != null
+    ? nearest.wind_speed_ms
+    : Math.round((wave * 3.2 + 1.5) * 10) / 10;
+  const windDir = nearest?.wind_direction_deg != null
+    ? Math.round(((nearest.wind_direction_deg % 360) + 360) % 360)
+    : null;
+  const windEstimate = nearest?.wind_speed_ms == null;
 
   // 해무 위험도: SST와 기온 차이 기반 (SST > 기온 → 해무 발생 가능)
   const fogDiff = (sst != null && temp != null) ? sst - temp : null;
@@ -120,6 +128,19 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
             letterSpacing: 0.3,
           }}>
             추정
+          </span>
+        )}
+        {weatherError && !weatherData && (
+          <span style={{
+            fontSize: 8,
+            color: '#ef4444',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: 4,
+            padding: '1px 4px',
+            fontWeight: 600,
+            letterSpacing: 0.3,
+          }}>
+            오프라인
           </span>
         )}
         <span style={{
@@ -195,6 +216,17 @@ export default function WeatherHud({ shipPos, weatherData, currentRouteKey, isMo
           color={fogColor}
           bar={fogDiff != null ? Math.min(Math.max(fogDiff / 10, 0), 1.0) : 0}
           barColor={fogColor}
+        />
+        <Row
+          icon="💨"
+          label={windEstimate ? '풍속(추정)' : '풍속'}
+          value={windSpeed != null
+            ? `${windSpeed.toFixed(1)}${windDir != null ? ` · ${windDir}°` : ''}`
+            : null}
+          unit="m/s"
+          color={windSpeed == null ? '#64748b' : windSpeed > 17 ? '#ef4444' : windSpeed > 10 ? '#f59e0b' : '#34d399'}
+          bar={windSpeed != null ? Math.min(windSpeed / 25.0, 1.0) : 0}
+          barColor={windSpeed == null ? '#64748b' : windSpeed > 17 ? '#ef4444' : windSpeed > 10 ? '#f59e0b' : '#34d399'}
           isLast
         />
       </div>

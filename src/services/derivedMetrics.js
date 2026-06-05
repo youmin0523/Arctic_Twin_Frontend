@@ -280,6 +280,13 @@ export function nearestWaveAt(weatherData, lat, lon, maxDistKm = 1500) {
       typeof best.visibility_km === 'number' ? best.visibility_km : null,
     temperatureC:
       typeof best.temperature_c === 'number' ? best.temperature_c : null,
+    // 실측 바람 (Open-Meteo Forecast, 10m) — wave와 동일 waypoint에서 함께 제공
+    windSpeedMs:
+      typeof best.wind_speed_ms === 'number' ? best.wind_speed_ms : null,
+    windDirectionDeg:
+      typeof best.wind_direction_deg === 'number' ? best.wind_direction_deg : null,
+    windGustMs:
+      typeof best.wind_gust_ms === 'number' ? best.wind_gust_ms : null,
     distKm: bestD,
   };
 }

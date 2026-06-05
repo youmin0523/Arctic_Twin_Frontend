@@ -15,6 +15,7 @@ import {
   initGlobalLandMask,
   isLandGlobal,
   findWaterDetour,
+  inNavigableCorridor,
 } from './landMaskGlobal';
 
 // ── 전역 육지 회피 후처리 ──────────────────────────────────────────────
@@ -31,7 +32,10 @@ function segmentCrossesLand(a, b) {
   const n = Math.max(2, Math.ceil(segKm / 5)); // ~5km 샘플
   for (let i = 1; i < n; i++) {
     const t = i / n;
-    if (isLandGlobal(a.lat + (b.lat - a.lat) * t, a.lon + (b.lon - a.lon) * t)) {
+    const lat = a.lat + (b.lat - a.lat) * t;
+    const lon = a.lon + (b.lon - a.lon) * t;
+    // 통항회랑(좁은 해협·운하)은 마스크상 육지여도 통항 가능 → 관통으로 보지 않음
+    if (isLandGlobal(lat, lon) && !inNavigableCorridor(lat, lon)) {
       return true;
     }
   }

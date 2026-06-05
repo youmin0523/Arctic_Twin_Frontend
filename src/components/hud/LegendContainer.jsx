@@ -26,7 +26,7 @@ function GebcoLegend() {
       {/* Title */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <span style={{ color: '#34d399', fontSize: '11px', letterSpacing: '1px', fontWeight: 'bold' }}>
-          {'\uD83C\uDF0A'} \uD574\uC800 \uC218\uC2EC\uB3C4
+          {'\uD83C\uDF0A GEBCO \uD574\uC800 \uC218\uC2EC\uB3C4'}
         </span>
         <span style={{ color: '#4a7a6a', fontSize: '9px' }}>EMODnet / GEBCO 2024</span>
       </div>
@@ -145,30 +145,30 @@ function NsidcLegend() {
       {/* Title */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <span style={{ color: '#60a5fa', fontSize: '11px', letterSpacing: '1px', fontWeight: 'bold' }}>
-          {'\u2744\uFE0F'} \uD574\uBE59 \uB18D\uB3C4 (Ice Concentration)
+          {'\u2744\uFE0F NSIDC \uD574\uBE59 \uB18D\uB3C4'}
         </span>
-        <span style={{ color: '#3b82f6', fontSize: '9px' }}>NASA AMSRU2 25km</span>
+        <span style={{ color: '#3b82f6', fontSize: '9px' }}>NASA GIBS / AMSR2 12km</span>
       </div>
 
-      {/* Color bar — 실사풍 투명→청회색→흰색 그라데이션 */}
+      {/* Color bar — AMSR2 농도 레인보우 (실제 GIBS 컬러맵 일치: 저농도 자홍→고농도 흰색) */}
       <div style={{ position: 'relative', marginBottom: '6px' }}>
         <div style={{
           width: '100%',
           height: '18px',
           borderRadius: '4px',
-          background: 'linear-gradient(to right, rgba(13,79,139,0) 0%, rgba(90,130,160,0.3) 10%, rgba(140,180,200,0.5) 30%, rgba(180,210,225,0.7) 50%, rgba(210,230,240,0.85) 70%, rgba(240,248,255,0.95) 100%)',
+          background: 'linear-gradient(to right, #3a003a 0%, #c800c8 14%, #7a00ff 24%, #0030ff 33%, #00bdff 43%, #00d98e 52%, #1eb400 60%, #bce900 70%, #fff800 75%, #ff9500 83%, #ff0e00 91%, #ff8080 96%, #ffffff 100%)',
           border: '1px solid rgba(59,130,246,0.3)',
         }} />
       </div>
 
-      {/* Percentage labels */}
+      {/* Percentage labels — 컬러바 색상과 매칭 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-        <span style={{ fontSize: '9px', color: '#666' }}>0%</span>
-        <span style={{ fontSize: '9px', color: '#8aa0a8' }}>30%</span>
-        <span style={{ fontSize: '9px', color: '#a0c0d0' }}>50%</span>
-        <span style={{ fontSize: '9px', color: '#b4d2e1' }}>70%</span>
-        <span style={{ fontSize: '9px', color: '#d2e6f0' }}>85%</span>
-        <span style={{ fontSize: '9px', color: '#f0f8ff' }}>100%</span>
+        <span style={{ fontSize: '9px', color: '#c060c0' }}>0%</span>
+        <span style={{ fontSize: '9px', color: '#5a6aff' }}>30%</span>
+        <span style={{ fontSize: '9px', color: '#00cfa0' }}>50%</span>
+        <span style={{ fontSize: '9px', color: '#9ed400' }}>70%</span>
+        <span style={{ fontSize: '9px', color: '#ff7a33' }}>85%</span>
+        <span style={{ fontSize: '9px', color: '#dddddd' }}>100%</span>
       </div>
 
       {/* Zone labels */}
@@ -180,26 +180,26 @@ function NsidcLegend() {
         gap: '2px',
       }}>
         <div style={{ textAlign: 'center', flex: 1 }}>
-          <div style={{ fontSize: '8px', color: '#5a82a0', marginBottom: '2px' }}>{'\u25CF'}</div>
-          <div style={{ fontSize: '8px', color: '#5a82a0', lineHeight: 1.2 }}>
+          <div style={{ fontSize: '8px', color: '#c84ad0', marginBottom: '2px' }}>{'\u25CF'}</div>
+          <div style={{ fontSize: '8px', color: '#c84ad0', lineHeight: 1.2 }}>
             {'\uC800\uB18D\uB3C4'}<br /><span style={{ color: '#555' }}>10~30%</span>
           </div>
         </div>
         <div style={{ textAlign: 'center', flex: 1 }}>
-          <div style={{ fontSize: '8px', color: '#8cb4c8', marginBottom: '2px' }}>{'\u25CF'}</div>
-          <div style={{ fontSize: '8px', color: '#8cb4c8', lineHeight: 1.2 }}>
+          <div style={{ fontSize: '8px', color: '#2a7aff', marginBottom: '2px' }}>{'\u25CF'}</div>
+          <div style={{ fontSize: '8px', color: '#2a7aff', lineHeight: 1.2 }}>
             {'\uC911\uB18D\uB3C4'}<br /><span style={{ color: '#555' }}>30~50%</span>
           </div>
         </div>
         <div style={{ textAlign: 'center', flex: 1 }}>
-          <div style={{ fontSize: '8px', color: '#b4d2e1', marginBottom: '2px' }}>{'\u25CF'}</div>
-          <div style={{ fontSize: '8px', color: '#b4d2e1', lineHeight: 1.2 }}>
+          <div style={{ fontSize: '8px', color: '#57b000', marginBottom: '2px' }}>{'\u25CF'}</div>
+          <div style={{ fontSize: '8px', color: '#57b000', lineHeight: 1.2 }}>
             {'\uACE0\uB18D\uB3C4'}<br /><span style={{ color: '#555' }}>50~85%</span>
           </div>
         </div>
         <div style={{ textAlign: 'center', flex: 1 }}>
-          <div style={{ fontSize: '8px', color: '#f0f8ff', marginBottom: '2px' }}>{'\u25CF'}</div>
-          <div style={{ fontSize: '8px', color: '#f0f8ff', lineHeight: 1.2 }}>
+          <div style={{ fontSize: '8px', color: '#ff5a2a', marginBottom: '2px' }}>{'\u25CF'}</div>
+          <div style={{ fontSize: '8px', color: '#ff5a2a', lineHeight: 1.2 }}>
             {'\uADF9\uACE0\uB18D\uB3C4'}<br /><span style={{ color: '#555' }}>85~100%</span>
           </div>
         </div>
@@ -215,35 +215,46 @@ function CopLegend() {
   return (
     <div
       id="cop-legend"
-      style={{ ...panelBase, borderColor: '#a855f7' }}
+      style={{ ...panelBase, borderColor: '#f59e0b' }}
     >
       {/* Title */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-        <span style={{ color: '#c084fc', fontSize: '11px', letterSpacing: '1px', fontWeight: 'bold' }}>
-          {'\uD83E\uDDCA'} \uD574\uBE59 \uB450\uAED8 (Ice Thickness)
+        <span style={{ color: '#fbbf24', fontSize: '11px', letterSpacing: '1px', fontWeight: 'bold' }}>
+          {'\uD83C\uDF21\uFE0F \uD574\uBE59 \uD45C\uBA74 \uC628\uB3C4 (MODIS)'}
         </span>
-        <span style={{ color: '#a855f7', fontSize: '9px' }}>Copernicus Marine</span>
+        <span style={{ color: '#f59e0b', fontSize: '9px' }}>NASA GIBS / MODIS Terra</span>
       </div>
 
-      {/* Color bar */}
+      {/* Color bar — MODIS 표면온도 레인보우 (실제 GIBS 컬러맵 일치: 차가움 보라→따뜻함 빨강) */}
       <div style={{ position: 'relative', marginBottom: '6px' }}>
         <div style={{
           width: '100%',
           height: '18px',
           borderRadius: '4px',
-          background: 'linear-gradient(to right, #1e1b4b 0%, #4c1d95 20%, #7c3aed 40%, #a855f7 60%, #d8b4fe 80%, #ffffff 100%)',
-          border: '1px solid rgba(168,85,247,0.3)',
+          background: 'linear-gradient(to right, #c500ff 0%, #6400ff 12%, #0010ff 24%, #0080ff 36%, #00e5ff 44%, #00ff80 56%, #b6ff00 68%, #ffff00 75%, #ff8000 88%, #ff1000 100%)',
+          border: '1px solid rgba(245,158,11,0.3)',
         }} />
       </div>
 
-      {/* Thickness labels */}
+      {/* Temperature labels (°C) — 컬러바와 매칭 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-        <span style={{ fontSize: '9px', color: '#4a6a8a' }}>0m</span>
-        <span style={{ fontSize: '9px', color: '#7c3aed' }}>1m</span>
-        <span style={{ fontSize: '9px', color: '#a855f7' }}>2m</span>
-        <span style={{ fontSize: '9px', color: '#d8b4fe' }}>3m</span>
-        <span style={{ fontSize: '9px', color: '#e9d5ff' }}>4m</span>
-        <span style={{ fontSize: '9px', color: '#ffffff' }}>5m+</span>
+        <span style={{ fontSize: '9px', color: '#c060ff' }}>{'-50°'}</span>
+        <span style={{ fontSize: '9px', color: '#3a6aff' }}>{'-30°'}</span>
+        <span style={{ fontSize: '9px', color: '#00d5e5' }}>{'-15°'}</span>
+        <span style={{ fontSize: '9px', color: '#00e060' }}>{'0°C'}</span>
+        <span style={{ fontSize: '9px', color: '#ff9a00' }}>{'+20°'}</span>
+        <span style={{ fontSize: '9px', color: '#ff3010' }}>{'+40°'}</span>
+      </div>
+
+      {/* 표면온도→두께 프록시 해석: 차가운 빙=두꺼움 / 따뜻한 빙=얇음 */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        borderTop: '1px solid rgba(245,158,11,0.15)',
+        paddingTop: '7px',
+      }}>
+        <span style={{ fontSize: '8px', color: '#7aa0ff' }}>{'차가운 빙(두꺼움)'}</span>
+        <span style={{ fontSize: '8px', color: '#ff8a3a' }}>{'따뜻한 빙(얇음)'}</span>
       </div>
     </div>
   );

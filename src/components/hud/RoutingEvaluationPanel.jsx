@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const STATUS_LABELS = {
   NSR_APPROVED:   { cls: 'approved',   text: '\u2714 NSR_APPROVED \u2014 \uC815\uC0C1 \uD1B5\uACFC \uC2B9\uC778' },
@@ -45,6 +45,18 @@ export default function RoutingEvaluationPanel({
   const [visibilityKm, setVisibilityKm] = useState(
     weatherData?.route_summary?.min_visibility_km ?? 10.0
   );
+
+  // weatherData는 마운트 후 비동기로 도착하므로 lazy useState 초기값으론 못 받는다.
+  // 실측 route_summary가 처음 들어오면 입력값을 1회 자동 채움(이후 사용자 편집 보존).
+  const weatherSyncedRef = useRef(false);
+  useEffect(() => {
+    if (weatherSyncedRef.current) return;
+    const rs = weatherData?.route_summary;
+    if (!rs) return;
+    if (rs.max_wave_height_m != null) setWaveHeight(rs.max_wave_height_m);
+    if (rs.min_visibility_km != null) setVisibilityKm(rs.min_visibility_km);
+    weatherSyncedRef.current = true;
+  }, [weatherData]);
 
   const result = evaluationResult || {};
   const statusInfo = STATUS_LABELS[result.status] || { cls: '', text: '-- \uBBF8\uD3C9\uAC00 --' };

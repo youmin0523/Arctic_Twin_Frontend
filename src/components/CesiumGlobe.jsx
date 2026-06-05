@@ -453,6 +453,10 @@ const CesiumGlobe = forwardRef(function CesiumGlobe(
           // //* [Modified Code] 20km 이내(근접 줌)만 깊이 테스트 비활성(지형 클리핑 방지),
           //   그 너머는 깊이 테스트 적용 → 반대 반구의 선박은 글로브에 가려짐.
           disableDepthTestDistance: 20000,
+          // //* [Modified Code] 웨이포인트(고도 5km point)보다 선박이 항상 위에
+          //   그려지도록 눈 좌표계에서 카메라 쪽(음수 z)으로 당긴다.
+          //   z는 화면 안쪽이 양수 → 음수일수록 뷰어에 가깝게(앞쪽) 렌더링.
+          eyeOffset: new Cesium.Cartesian3(0, 0, -15000),
           scaleByDistance: shipScaleByDistance(),
         },
         label: {

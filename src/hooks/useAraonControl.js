@@ -21,6 +21,10 @@ export const ARAON_HOME = { lat: 71.0, lon: 179.5 }; // Wrangel Island 북안
 const SPEED_KN = 16;
 const KN_TO_KMH = 1.852;
 const ESCORT_LEAD_KM = 25; // 에스코트 시 본선 앞 유지 간격
+// B안: 사전배치 거점(Wrangel)이 항로에서 이 거리 안을 지날 때만 호위 유효.
+// NSR 은 Wrangel 북방 ~150km 를 통과하므로 충분. SUEZ/CAPE 나 역방향에서
+// '항로상 Wrangel 최근접 = 부산(끝점)' 으로 스냅되어 도착지에 박히는 현상 방지.
+const WRANGEL_REACH_KM = 400;
 const TRANSIT_THRESHOLD_KM = 150; // 본선과 이 거리 밖이면 '선도', 안이면 '호위'
 const DOCK_EPS = 0.004; // 진행률 기준 모항 근접 판정
 const EARTH_R = 6371;
@@ -48,10 +52,10 @@ function bearingDeg(a, b) {
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-// 항로 캐시 (waypoints 레퍼런스 기준): 총거리 + Wrangel 최근접 진행률
-let _routeCache = { wps: null, totalKm: 1, homeProg: 0.5 };
+// 항로 캐시 (waypoints 레퍼런스 기준): 총거리 + Wrangel 최근접 진행률 + 근접 유효성
+let _routeCache = { wps: null, totalKm: 1, homeProg: 0.5, homeReachable: false };
 function routeInfo(wps, timed) {
-  if (!wps || wps.length < 2) return { totalKm: 1, homeProg: 0 };
+  if (!wps || wps.length < 2) return { totalKm: 1, homeProg: 0, homeReachable: false };
   if (_routeCache.wps === wps) return _routeCache;
   const totalKm = Math.max(1, calculateRouteDistanceKM(wps));
   // Wrangel 최근접 진행률 탐색 (0~1, 100분할)
@@ -67,7 +71,8 @@ function routeInfo(wps, timed) {
       best = t;
     }
   }
-  _routeCache = { wps, totalKm, homeProg: best };
+  // B안: 항로가 Wrangel 근방(WRANGEL_REACH_KM)을 실제로 지날 때만 호위 유효
+  _routeCache = { wps, totalKm, homeProg: best, homeReachable: bestD <= WRANGEL_REACH_KM };
   return _routeCache;
 }
 
@@ -100,6 +105,9 @@ export default function useAraonControl({
       // 항로상 Wrangel 최근접 지점으로 진입
       const { waypoints, timed } = getRoute() || {};
       const info = routeInfo(waypoints, timed);
+      // B안: 항로가 Wrangel 사전배치 거점 근처를 안 지나면(비북극·역방향 등)
+      // 호위가 물리적으로 불가 → 호출 무시(idle 유지). 도착지 부산에 박히는 현상 방지.
+      if (!info.homeReachable) return;
       s.progress = info.homeProg;
     }
     s.mode = 'active';
