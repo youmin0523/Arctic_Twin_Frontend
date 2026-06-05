@@ -2485,8 +2485,10 @@ function AppInner() {
         });
       }
     } else {
-      const ARAON_LAT = 71.0;
-      const ARAON_LON = 179.5;
+      // idle 정박 — 활성 항로 자산의 실재 모항 기준(NSR=Wrangel/NWP=Resolute/TSR=Longyearbyen)
+      const homePos = activeEscortAsset?.home || { lat: 71.0, lon: 179.5 };
+      const ARAON_LAT = homePos.lat;
+      const ARAON_LON = homePos.lon;
       const dLat = ARAON_LAT - ship.lat;
       const dLon = ARAON_LON - ship.lon;
       const mPerLat = 111132.954;
@@ -2502,7 +2504,7 @@ function AppInner() {
       });
       if (three.setVoyageIceContext) three.setVoyageIceContext(null);
     }
-  }, [voyageActive, state.shipState, state.manualSpeed, sampleIceFn]);
+  }, [voyageActive, state.shipState, state.manualSpeed, sampleIceFn, activeEscortAsset]);
 
   const handleLayerToggle = useCallback(
     (layerKey, checked) => {
