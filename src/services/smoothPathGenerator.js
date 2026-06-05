@@ -172,13 +172,22 @@ export function mergeDetourSmooth(
   const beforeIdx = Math.max(0, insertStartIdx - 1);
   const afterIdx = Math.min(originalWps.length - 1, insertEndIdx + 1);
 
-  const controlPoints = [
+  const rawControl = [
     originalWps[beforeIdx],             // 이전 제어점
     originalWps[insertStartIdx],        // 시작 연결점
     ...detourWps,                        // 우회 경로
     originalWps[insertEndIdx],          // 끝 연결점
     originalWps[afterIdx],              // 다음 제어점
   ];
+
+  // 연속 중복 제어점 제거 — detourWps 가 이미 시작/끝 연결점을 포함하면 동일 점이
+  // 2연속되어 Catmull-Rom 첨점(cusp)/루프를 유발한다. (RL 경로는 연결점 포함,
+  // A* detourPortion 은 미포함 — 양쪽 호출을 모두 안전하게 처리)
+  const controlPoints = rawControl.filter(
+    (p, i) =>
+      i === 0 ||
+      approxDistKm(rawControl[i - 1].lat, rawControl[i - 1].lon, p.lat, p.lon) > 0.05,
+  );
 
   // 2. Catmull-Rom 스플라인 보간
   const smoothDetour = catmullRomSpline(controlPoints, splineSamples, tension);
