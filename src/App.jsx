@@ -1674,6 +1674,8 @@ function AppInner() {
   // 시뮬레이션 제어
   const handleStart = useCallback(() => {
     if (!state.isSimulating) {
+      // 자동 항해 시작 시 호위 쇄빙선 검증 오버라이드 해제 → 항로 기준 실제 호위로 복귀
+      setEscortOverrideId(null);
       // 시작 시 simElapsed를 현재 progress 기반으로 복원
       // //! [Original Code]
       //      simElapsedRef.current = state.simProgress * getTotalSeconds(state.currentRouteKey);
