@@ -1333,13 +1333,13 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         pushTri(p0, p1, p2, n, col);
         pushTri(p0, p2, p3, n, col);
       };
-      // 고도별 색: 저지 녹색 → 구릉 카키 → 산지 회녹 → 설선 설백(북극감)
+      // 고도별 색(바다=청색과 대비되게 밝고 따뜻하게): 저지 올리브 → 구릉 녹색 → 산지 황갈 → 설선 설백
       const colorFor = (h) =>
-        h < 70 ? [0.24, 0.38, 0.22]
-          : h < 120 ? [0.4, 0.44, 0.3]
-            : h < 165 ? [0.62, 0.64, 0.58]
-              : [0.86, 0.89, 0.92];
-      const CLIFF = [0.26, 0.28, 0.24]; // 절벽/측벽(어두운 톤)
+        h < 70 ? [0.46, 0.5, 0.3]
+          : h < 120 ? [0.38, 0.54, 0.28]
+            : h < 165 ? [0.58, 0.56, 0.46]
+              : [0.95, 0.97, 1.0];
+      const CLIFF = [0.33, 0.3, 0.23]; // 절벽/측벽 — 어두운 흙색(음영·입체감)
       const UP = { x: 0, y: 1, z: 0 };
 
       for (let j = 0; j < nLat; j++) {
@@ -1404,9 +1404,14 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       const mat = trackDisposable(
         new THREE.MeshStandardMaterial({
           vertexColors: true,
-          roughness: 0.95,
+          roughness: 1.0,
           metalness: 0.0,
           side: THREE.DoubleSide,
+          // 안개 워시아웃 차단 — 바다(안개 유지)와 대비되어 먼 육지도 또렷이 구분됨.
+          fog: false,
+          // 저조도/극야에도 육지가 검게 죽지 않도록 약한 자발광(중립 톤).
+          emissive: 0x2a2c26,
+          emissiveIntensity: 0.45,
         }),
       );
       const landGroup = new THREE.Group();
