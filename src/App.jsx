@@ -82,7 +82,7 @@ import {
 import ProximityWarningOverlay from './components/hud/ProximityWarningOverlay';
 import WaypointEditor from './components/WaypointEditor';
 import useVoyagePlayback from './hooks/useVoyagePlayback';
-import useAraonControl, { ARAON_HOME } from './hooks/useAraonControl';
+import useAraonControl, { ARAON_HOME, ESCORT_ASSETS } from './hooks/useAraonControl';
 import VoyagePlaybackLayer from './components/VoyagePlayback/VoyagePlaybackLayer';
 import VoyageHUD from './components/VoyagePlayback/VoyageHUD';
 import VoyageControls from './components/VoyagePlayback/VoyageControls';
@@ -180,15 +180,24 @@ function AppInner() {
     const lon = `${p.lon.toFixed(1)}${p.lon >= 0 ? 'E' : 'W'}`;
     return `${lat} ${lon}`;
   };
+  // 현재 활성 항로의 호위 자산 (NSR=아라온 / NWP=CCGS / TSR=원자력 쇄빙선). 비북극=null.
+  const activeEscortAsset = ESCORT_ASSETS[state.currentRouteKey] || null;
   let araonInfo = {
-    position: '71.0N 179.5E',
-    statusKo: '대기',
+    name: activeEscortAsset?.name || ESCORT_ASSETS.NSR.name,
+    org: activeEscortAsset?.org || ESCORT_ASSETS.NSR.org,
+    flag: activeEscortAsset?.flag || ESCORT_ASSETS.NSR.flag,
+    homeName: activeEscortAsset?.homeName || ESCORT_ASSETS.NSR.homeName,
+    position: formatLatLonShort(
+      (activeEscortAsset || ESCORT_ASSETS.NSR).home,
+    ),
+    statusKo: activeEscortAsset ? '대기' : '해당 없음 (비북극 항로)',
   };
   if (voyageActive && voyage.trace) {
     const ibs = sampleIcebreakersAt(voyage.trace, voyage.tHours);
     const araon = ibs.find((x) => x.id === 'ib-araon');
     if (araon) {
       araonInfo = {
+        ...araonInfo,
         position: formatLatLonShort(araon.position),
         statusKo: ARAON_STATUS_KO[araon.status] || araon.status,
       };
@@ -653,19 +662,69 @@ function AppInner() {
       pType = 'iceberg'; pLevel = 'warning'; pDist = nearestIce;
       pMsg = `거리 ${Math.round(nearestIce)}m`;
     }
-    // 육지 (전방 스캔, km 단위) — 빙하보다 임박할 때만 승격
-    const landP = isGlobalLandMaskReady()
-      ? landAheadGlobal(lat, lon, state.shipState.heading || 0, 120, 8)
-      : landAhead(lat, lon, state.shipState.heading || 0, 120, 10);
-    if (landP.blocked) {
-      if (landP.distanceKm < 12 && pLevel !== 'critical') {
-        pType = 'land'; pLevel = 'critical'; pDist = landP.distanceKm * 1000;
-        pMsg = `전방 ${Math.round(landP.distanceKm)}km`;
-      } else if (landP.distanceKm < 40 && pLevel === 'none') {
-        pType = 'land'; pLevel = 'warning'; pDist = landP.distanceKm * 1000;
-        pMsg = `전방 ${Math.round(landP.distanceKm)}km`;
+    // 육지 (부채꼴 전방 스캔, km + 방위) — 빙하보다 임박할 때만 승격.
+    //   heading 기준 ±50°를 10° 간격으로 스캔해 "가장 가까운 육지"의 방위를 구한다.
+    //   동거리 동률이면 |rel| 작은(정면) 쪽 우선(0,-10,10,-20,...) → 충돌판단은 정면 가중.
+    const shipHdg = state.shipState.heading || 0;
+    const scanFn = isGlobalLandMaskReady() ? landAheadGlobal : landAhead;
+    let landNear = { blocked: false, distanceKm: Infinity, relDeg: 0 };
+    for (const rel of [0, -10, 10, -20, 20, -30, 30, -40, 40, -50, 50]) {
+      const hb = (shipHdg + rel + 360) % 360;
+      const r = scanFn(lat, lon, hb, 120, 8);
+      if (r.blocked && r.distanceKm < landNear.distanceKm) {
+        landNear = { blocked: true, distanceKm: r.distanceKm, relDeg: rel };
       }
     }
+    // 방위(절대/상대) 및 좌우 라벨
+    const landRel = landNear.blocked ? landNear.relDeg : null; // +우현 / −좌현
+    const landAbs =
+      landNear.blocked ? (shipHdg + landNear.relDeg + 360) % 360 : null;
+    const landDistKm = landNear.blocked ? Math.round(landNear.distanceKm) : null;
+    const sideLabel =
+      landRel == null ? '' : Math.abs(landRel) <= 5 ? '전방' : landRel < 0 ? '좌현' : '우현';
+    if (landNear.blocked) {
+      const dm = `${sideLabel} ${landDistKm}km`;
+      if (landNear.distanceKm < 12 && pLevel !== 'critical') {
+        pType = 'land'; pLevel = 'critical'; pDist = landNear.distanceKm * 1000;
+        pMsg = dm;
+      } else if (landNear.distanceKm < 40 && pLevel === 'none') {
+        pType = 'land'; pLevel = 'warning'; pDist = landNear.distanceKm * 1000;
+        pMsg = dm;
+      }
+    }
+
+    // 항로 코스 방위: 선박에서 가장 가까운 항로 구간의 진행 방위(=경로가 가리키는 방향).
+    //   RL 회피로 선수(heading)가 항로에서 벗어나면 두 버그가 벌어져 "이탈"이 한눈에 보임.
+    const navWps = activeWpRef.current || [];
+    let courseBearing = shipHdg;
+    if (navWps.length > 1) {
+      const k = Math.cos((lat * Math.PI) / 180);
+      let best = Infinity;
+      let bi = 0;
+      for (let i = 0; i < navWps.length - 1; i++) {
+        const a = navWps[i];
+        const b = navWps[i + 1];
+        const ax = a.lon * k, ay = a.lat, bx = b.lon * k, by = b.lat;
+        const px = lon * k, py = lat;
+        const dx = bx - ax, dy = by - ay;
+        const L = dx * dx + dy * dy;
+        let t = L ? ((px - ax) * dx + (py - ay) * dy) / L : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const cx = ax + t * dx, cy = ay + t * dy;
+        const d = Math.hypot(px - cx, py - cy);
+        if (d < best) { best = d; bi = i; }
+      }
+      const a = navWps[bi];
+      const b = navWps[bi + 1];
+      const la1 = (a.lat * Math.PI) / 180, la2 = (b.lat * Math.PI) / 180;
+      const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+      const y = Math.sin(dLon) * Math.cos(la2);
+      const x =
+        Math.cos(la1) * Math.sin(la2) -
+        Math.sin(la1) * Math.cos(la2) * Math.cos(dLon);
+      courseBearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+    }
+
     dispatch({
       type: 'SET_PROXIMITY_ALERT',
       payload: { level: pLevel, type: pType, distM: pDist, message: pMsg },
@@ -699,6 +758,11 @@ function AppInner() {
         iceClass: state.shipSpecs.iceClass || 'PC2',
         bergAlert,
         bergAlertVisible,
+        // ── 항법 방위(컴퍼스 테이프/방향 버그용) ──
+        courseBearing,        // 항로가 가리키는 코스 방위(°T)
+        landRel,              // 가장 가까운 육지의 상대방위(+우현/−좌현, 없으면 null)
+        landBearing: landAbs, // 육지 절대방위(°T)
+        landDistKm,           // 육지까지(km)
       },
     });
   }, [
@@ -816,6 +880,8 @@ function AppInner() {
     ),
     getMultiplier: useCallback(() => multiplierRef.current, []),
     getActive: useCallback(() => appModeRef.current === 'live', []),
+    // 항로별 호위 자산(NSR=아라온/NWP=CCGS/TSR=원자력 쇄빙선). 비북극은 null.
+    getAsset: useCallback(() => ESCORT_ASSETS[currentRouteKeyRef.current] || null, []),
   });
 
   // ── 항구/경로 변경 시 동적 경로 생성 ──────────────────────────
@@ -1840,20 +1906,21 @@ function AppInner() {
     ],
   );
 
-  // Ship Design Info "목표 항로" 변경 — 연료/평가 비교용 값만 바꾼다.
-  // 활성 항로(currentRouteKey)·▶ 마커·본선 위치는 건드리지 않음 (Sidebar Routes 와 분리).
-  const handleDesignRouteChange = useCallback(
-    (routeKey) => {
-      dispatch({ type: 'SET_DESIGN_ROUTE', payload: routeKey });
-    },
-    [dispatch],
-  );
+  // [통합] 항로 선택은 handleRouteSelect 단일 경로로 일원화됨.
+  //   - ROUTES 패널, SHIP DESIGN INFO "목표 항로" 드롭다운, 우회 권고 수락이
+  //     모두 handleRouteSelect 를 호출 → 활성 항로(currentRouteKey)와 목표 항로
+  //     (designRouteKey)를 항상 같은 항로로 동기화(양방향).
 
   // 항로 선택 (사이드바 Routes 클릭) — 처음부터 다시 항해 시작
   // visibility ON, 진행도 0 리셋, 본선을 출발항으로 즉시 점프
   const handleRouteSelect = useCallback(
     (routeKey) => {
       dispatch({ type: 'SET_ROUTE', payload: routeKey });
+      // 양방향 동기화: 활성 항로(자동항해)와 목표 항로(타당성 평가)를 한 항로로 일치.
+      // → ROUTES에서 고르든 SHIP DESIGN INFO에서 고르든 평가 대상=항해 대상.
+      dispatch({ type: 'SET_DESIGN_ROUTE', payload: routeKey });
+      // 항로가 바뀌면 이전 평가 결과는 무효 → 초기화(stale 적합/반려 판정 방지).
+      setEvaluationResult(null);
       dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
       setRouteVisibility((prev) => {
         if (prev[routeKey]) return prev;
@@ -2723,7 +2790,7 @@ function AppInner() {
           false,
         iceClass: state.shipSpecs.iceClass || 'PC2',
         iceConditions,
-      });
+      }, state.designRouteKey);
 
       // 항로 거리 계산
       const suezWps = ROUTES.SUEZ;
@@ -2927,6 +2994,31 @@ function AppInner() {
   const ARCTIC_ROUTE_KEYS = ['NSR', 'NWP', 'TSR'];
   const isArcticRoute = ARCTIC_ROUTE_KEYS.includes(state.currentRouteKey);
 
+  // ── 자동항해 게이트: 북극항로 타당성 반려 시 시뮬레이션 차단 ──────────
+  // 평가가 REROUTE_*(반려)이고 현재 활성 항로가 북극항로면 "자동 항해 시작"을
+  // 막는다. 반려된 북극항로를 굳이 항해할 필요가 없으므로(안전·일관성).
+  // 평가 미실행(evaluationResult=null) 또는 비북극 항로는 차단하지 않는다.
+  const evalStatus = evaluationResult?.status;
+  const isEvalRejected =
+    evalStatus === 'REROUTE_SUEZ' || evalStatus === 'REROUTE_CAPE';
+  const navBlocked = isArcticRoute && isEvalRejected;
+  const suggestedReroute = isEvalRejected
+    ? evalStatus === 'REROUTE_CAPE'
+      ? 'CAPE'
+      : 'SUEZ'
+    : null;
+
+  // ── 호위 에스코트 ↔ POLARIS RIO 연동 ──────────────────────────────
+  // RESTRICTED(조건부, -10≤RIO<0) = 쇄빙 에스코트 필수 → 자산 자동 호출.
+  // APPROVED(독립 항행 가능)·미평가 = 에스코트 불요 → 자동 복귀(대기).
+  // (수동 호출/복귀 버튼은 평가 상태가 바뀌기 전까지 그대로 유지)
+  const escortRequired = isArcticRoute && evalStatus === 'NSR_RESTRICTED';
+  useEffect(() => {
+    if (appMode !== 'live') return;
+    if (escortRequired) callAraon();
+    else recallAraon();
+  }, [escortRequired, appMode, callAraon, recallAraon]);
+
   // A안: 아라온(Wrangel 사전배치 북극 호위 자산)은 북극 항로(NSR/NWP/TSR)에서만
   // 노출·운용. SUEZ/CAPE/ETC 같은 비-북극 항로에선 표시하지 않는다(부산 끝점 스냅 현상 차단).
   let araonDisplayPos = null;
@@ -3084,6 +3176,10 @@ function AppInner() {
             heading={state.shipState.heading}
             speed={state.hud.speed}
             rollAngle={parseFloat(state.hud.roll) || 0}
+            courseBearing={state.hud.courseBearing}
+            landBearing={state.hud.landBearing}
+            landRel={state.hud.landRel}
+            landDistKm={state.hud.landDistKm}
           />
           <BinocularsMask
             visible={state.binocularsActive}
@@ -3118,6 +3214,7 @@ function AppInner() {
             cesiumRef={cesiumRef}
             visible={appMode === 'live'}
             displayPos={araonDisplayPos}
+            asset={activeEscortAsset}
           />
           {voyageActive && (
             <>
@@ -3166,6 +3263,10 @@ function AppInner() {
           <ProximityWarningOverlay
             proximityAlert={state.proximityAlert}
             avoidance={state.avoidance}
+            nav={{
+              landRel: state.hud.landRel,
+              landDistKm: state.hud.landDistKm,
+            }}
           />
 
           {/* AI 자율 회피 지표 — 좌상단 (시뮬 중 위협 발생 시에만 표시).
@@ -3243,6 +3344,7 @@ function AppInner() {
               }}
               sampleIceFn={sampleIceFn}
               araonDisplayPos={araonDisplayPos}
+              escortAsset={activeEscortAsset}
               araonControl={
                 !voyageActive && isArcticRoute
                   ? {
@@ -3413,22 +3515,80 @@ function AppInner() {
                     {PORTS[state.arrivalPort]?.name || '로테르담'}
                   </div>
                 </div>
+                {/* 타당성 반려 배너 — 북극항로가 평가 반려된 경우 자동항해 차단 안내 */}
+                {navBlocked && (
+                  <div
+                    style={{
+                      padding: '6px 8px',
+                      background: 'rgba(239,68,68,0.12)',
+                      border: '1px solid rgba(239,68,68,0.5)',
+                      borderRadius: 4,
+                      fontSize: 10,
+                      lineHeight: 1.5,
+                      color: '#fca5a5',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>
+                      ⛔ 타당성 반려 — 자동항해 불가
+                    </div>
+                    <div style={{ color: '#fecaca' }}>
+                      {state.currentRouteKey} 항로는 현재 선박 제원·빙상 조건에서
+                      운항 부적합으로 평가되었습니다. {suggestedReroute} 우회 항로로
+                      변경 후 진행하세요.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        suggestedReroute && handleRouteSelect(suggestedReroute)
+                      }
+                      style={{
+                        marginTop: 5,
+                        width: '100%',
+                        padding: '5px 8px',
+                        border: '1px solid #f59e0b',
+                        borderRadius: 4,
+                        background: 'rgba(245,158,11,0.15)',
+                        color: '#fbbf24',
+                        cursor: 'pointer',
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                      title={`활성·목표 항로를 ${suggestedReroute}로 변경`}
+                    >
+                      ↩ {suggestedReroute} 우회 항로로 변경
+                    </button>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={handleStart}
-                  disabled={state.manualMode}
+                  disabled={state.manualMode || (navBlocked && !state.isSimulating)}
                   style={{
                     padding: '8px 12px',
                     border: state.isSimulating
                       ? '2px solid #ef4444'
-                      : '2px solid #22d3ee',
+                      : navBlocked
+                        ? '2px solid #64748b'
+                        : '2px solid #22d3ee',
                     borderRadius: 4,
                     background: state.isSimulating
                       ? 'rgba(239,68,68,0.15)'
-                      : 'rgba(34,211,238,0.15)',
-                    color: state.isSimulating ? '#ef4444' : '#22d3ee',
-                    cursor: state.manualMode ? 'not-allowed' : 'pointer',
-                    opacity: state.manualMode ? 0.4 : 1,
+                      : navBlocked
+                        ? 'rgba(100,116,139,0.12)'
+                        : 'rgba(34,211,238,0.15)',
+                    color: state.isSimulating
+                      ? '#ef4444'
+                      : navBlocked
+                        ? '#64748b'
+                        : '#22d3ee',
+                    cursor:
+                      state.manualMode || (navBlocked && !state.isSimulating)
+                        ? 'not-allowed'
+                        : 'pointer',
+                    opacity:
+                      state.manualMode || (navBlocked && !state.isSimulating)
+                        ? 0.4
+                        : 1,
                     fontSize: 12,
                     fontWeight: 700,
                     letterSpacing: 1,
@@ -3436,9 +3596,11 @@ function AppInner() {
                   title={
                     state.manualMode
                       ? '수동 조종 중 — 먼저 해제하세요'
-                      : state.isSimulating
-                        ? '자동 항해 일시 정지'
-                        : '선택된 항로의 waypoint 를 따라 자동 항해 시작'
+                      : navBlocked && !state.isSimulating
+                        ? `타당성 반려 — ${suggestedReroute} 우회 항로로 변경 후 가능`
+                        : state.isSimulating
+                          ? '자동 항해 일시 정지'
+                          : '선택된 항로의 waypoint 를 따라 자동 항해 시작'
                   }
                 >
                   {state.isSimulating ? '⏸ 자동 항해 정지' : '▶ 자동 항해 시작'}
@@ -3559,7 +3721,7 @@ function AppInner() {
         evaluationResult={evaluationResult}
         onEvaluate={handleEvaluate}
         currentRoute={state.designRouteKey}
-        onRouteChange={handleDesignRouteChange}
+        onRouteChange={handleRouteSelect}
         onReset={handleResetEvaluation}
         araon={araonInfo}
       />
@@ -3584,11 +3746,10 @@ function AppInner() {
         onClose={() => setRouteAlert(null)}
         onConfirm={() => {
           if (routeAlert?.toRoute) {
-            // 우회 권고 수락 = 실제 활성 항로(▶·본선)를 우회 항로로 변경.
-            // 목표 항로도 함께 동기화해 평가 패널이 새 항로 기준으로 재평가되게 함.
-            dispatch({ type: 'SET_ROUTE', payload: routeAlert.toRoute });
-            dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: null });
-            handleDesignRouteChange(routeAlert.toRoute);
+            // 우회 권고 수락 = 활성 항로·목표 항로를 한 번에 우회 항로로 변경.
+            // handleRouteSelect가 양방향 동기화(활성+목표)·평가 리셋·본선 위치
+            // 초기화까지 처리하므로 단일 호출로 일관 적용.
+            handleRouteSelect(routeAlert.toRoute);
             setRouteAlert(null);
           }
         }}
