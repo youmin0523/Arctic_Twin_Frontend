@@ -930,6 +930,8 @@ function AppInner() {
           state.currentRouteKey,
           state.cachedIceData,
           realBergsRef.current,
+          0.7,
+          state.shipSpecs?.iceClass || 'PC5', // POLARIS 해빙 우회에 실측 선박 빙급 반영
         );
         if (!cancelled && wps && wps.length > 1) {
           dispatch({ type: 'SET_GENERATED_WAYPOINTS', payload: wps });
@@ -945,7 +947,7 @@ function AppInner() {
     return () => {
       cancelled = true;
     };
-  }, [state.departurePort, state.arrivalPort, state.currentRouteKey]);
+  }, [state.departurePort, state.arrivalPort, state.currentRouteKey, state.shipSpecs?.iceClass]);
 
   // ── 육지 마스크 사전 로드 (육지 회피/경고용) ──────────────────
   useEffect(() => {
