@@ -112,6 +112,9 @@ function waterDetour(from, to, opts = {}) {
   const maxR = Math.min(META.rows - 1, Math.max(sr, gr) + marginCells);
   const minRelC = Math.min(sc, relGC) - marginCells;
   const maxRelC = Math.max(sc, relGC) + marginCells;
+  // 윈도우 크기 상한 — 거대 구간(수십°)에서 탐색공간 폭발(OOM/탭 멈춤) 방지. 초과 시 null.
+  const maxWindowCells = opts.maxWindowCells ?? Infinity;
+  if ((maxR - minR + 1) * (maxRelC - minRelC + 1) > maxWindowCells) return null;
   const key = (c, r) => r * META.cols + ((c % META.cols) + META.cols) % META.cols;
   const g = new Map(), came = new Map(), relCol = new Map(), closed = new Set();
   const open = new Heap();
@@ -185,7 +188,14 @@ function fixRoute(wps) {
   return w;
 }
 
-// ── 파싱 ──
+// 다른 검증 스크립트에서 0.05° 수로 우회 로직을 재사용할 수 있도록 export
+module.exports = {
+  waterDetour, segBad, segBlockedDDA, snapToWater, blocked, isBlockedLL,
+  colOf, rowOf, lonOfCol, latOfRow,
+};
+
+// ── 파싱 + 실행 (직접 실행 시에만) ──
+if (require.main === module) {
 const src = fs.readFileSync(ARCTIC, 'utf8');
 function parseWps(body) {
   const wps = []; const r = /\{\s*lon:\s*(-?[0-9.]+),\s*lat:\s*(-?[0-9.]+),\s*label:\s*'([^']*)'/g; let x;
@@ -218,3 +228,4 @@ if (WRITE) {
   console.log('\n✍  arcticRoutes.js 에 NSR/NWP/TSR 교정 반영 완료');
 }
 console.log(`\n==== 교정후 총 (육지관통+WP육지): ${totalBad} ${WRITE ? '[WRITTEN]' : '[PREVIEW]'} ====`);
+}
