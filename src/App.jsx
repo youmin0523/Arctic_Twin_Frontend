@@ -180,8 +180,26 @@ function AppInner() {
     const lon = `${p.lon.toFixed(1)}${p.lon >= 0 ? 'E' : 'W'}`;
     return `${lat} ${lon}`;
   };
+  // 호위 쇄빙선 검증용 — 드롭다운으로 3종 중 선택 시 해당 자산을 자기 모항에 고정
+  // 표시(검사 모드). null 이면 활성 항로 기준 자동.
+  const [escortOverrideId, setEscortOverrideId] = useState(null);
+  const ESCORT_OPTIONS = [
+    { id: 'araon', label: '🇰🇷 아라온' },
+    { id: 'ccgs', label: '🇨🇦 CCGS 쇄빙선' },
+    { id: 'rosatom', label: '🇷🇺 원자력 쇄빙선' },
+  ];
+  const ESCORT_BY_ID = {
+    araon: ESCORT_ASSETS.NSR,
+    ccgs: ESCORT_ASSETS.NWP,
+    rosatom: ESCORT_ASSETS.TSR,
+  };
+  const escortOverrideAsset = escortOverrideId
+    ? ESCORT_BY_ID[escortOverrideId]
+    : null;
   // 현재 활성 항로의 호위 자산 (NSR=아라온 / NWP=CCGS / TSR=원자력 쇄빙선). 비북극=null.
-  const activeEscortAsset = ESCORT_ASSETS[state.currentRouteKey] || null;
+  // 검증용 오버라이드가 있으면 그 자산을 우선(아이콘·이름·3D·위치 모두 반영).
+  const activeEscortAsset =
+    escortOverrideAsset || ESCORT_ASSETS[state.currentRouteKey] || null;
   let araonInfo = {
     name: activeEscortAsset?.name || ESCORT_ASSETS.NSR.name,
     org: activeEscortAsset?.org || ESCORT_ASSETS.NSR.org,
@@ -3026,7 +3044,16 @@ function AppInner() {
   // A안: 아라온(Wrangel 사전배치 북극 호위 자산)은 북극 항로(NSR/NWP/TSR)에서만
   // 노출·운용. SUEZ/CAPE/ETC 같은 비-북극 항로에선 표시하지 않는다(부산 끝점 스냅 현상 차단).
   let araonDisplayPos = null;
-  if (isArcticRoute && voyageActive && voyage.trace) {
+  if (escortOverrideAsset) {
+    // 검증 모드: 선택한 쇄빙선을 자기 모항(연안 수역)에 고정 표시 — 위치 확인용
+    araonDisplayPos = {
+      lat: escortOverrideAsset.home.lat,
+      lon: escortOverrideAsset.home.lon,
+      status: 'idle',
+      label: `대기 (${escortOverrideAsset.homeName})`,
+      heading: 0,
+    };
+  } else if (isArcticRoute && voyageActive && voyage.trace) {
     const ibs = sampleIcebreakersAt(voyage.trace, voyage.tHours);
     const a = ibs.find((x) => x.id === 'ib-araon');
     if (a) {
@@ -3071,6 +3098,23 @@ function AppInner() {
     };
   }
   // 표시 안 함 → araonDisplayPos=null → AraonLiveMarker 가 entity 미생성/제거
+
+  // "쇄빙선 위치로 이동" — 현재 쇄빙선 위치로 카메라 비행(FOLLOW면 위성 조감 전환).
+  const handleFlyToEscort = () => {
+    const pos = araonDisplayPos;
+    if (!pos) return;
+    if (state.currentMode === 'FOLLOW') {
+      dispatch({ type: 'SET_MODE', payload: 'SATELLITE' });
+      dispatch({ type: 'SET_BRIDGE_VISIBLE', payload: false });
+    }
+    const viewer = viewerRef.current;
+    if (viewer && !viewer.isDestroyed()) {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(pos.lon, pos.lat, 80000),
+        duration: 1.2,
+      });
+    }
+  };
 
   return (
     <div
@@ -3217,7 +3261,7 @@ function AppInner() {
           {/* Live Simulation 모드: 아라온이 본선과 함께 움직임 (호위 시 본선 옆, 평시 Wrangel) */}
           <AraonLiveMarker
             cesiumRef={cesiumRef}
-            visible={appMode === 'live'}
+            visible={appMode === 'live' || !!escortOverrideAsset}
             displayPos={araonDisplayPos}
             asset={activeEscortAsset}
           />
@@ -3350,6 +3394,10 @@ function AppInner() {
               sampleIceFn={sampleIceFn}
               araonDisplayPos={araonDisplayPos}
               escortAsset={activeEscortAsset}
+              escortOptions={ESCORT_OPTIONS}
+              escortSelectedId={activeEscortAsset?.id || 'araon'}
+              onEscortSelect={setEscortOverrideId}
+              onFlyToEscort={handleFlyToEscort}
               araonControl={
                 !voyageActive && isArcticRoute
                   ? {

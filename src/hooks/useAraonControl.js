@@ -25,7 +25,7 @@ import { routePos, calculateRouteDistanceKM } from '../services/shipSimulator';
 export const ESCORT_ASSETS = {
   NSR: {
     id: 'araon', name: '아라온', org: 'KOPRI', flag: '🇰🇷',
-    home: { lat: 71.0, lon: 179.5 }, homeName: 'Wrangel섬',
+    home: { lat: 71.7, lon: 179.5 }, homeName: 'Wrangel 북방 연안',
     speedKn: 16, reachKm: 400,
     // 시각 특성 — 한국 KOPRI 아라온: 빨간 선체 + 흰 상부 + 주황 A-프레임 크레인 + 헬리데크
     hullColor: '#c0392b',
@@ -37,7 +37,7 @@ export const ESCORT_ASSETS = {
   },
   NWP: {
     id: 'ccgs', name: 'CCGS 쇄빙선', org: '캐나다 해안경비대', flag: '🇨🇦',
-    home: { lat: 74.68, lon: -94.9 }, homeName: 'Resolute Bay',
+    home: { lat: 74.55, lon: -94.9 }, homeName: 'Resolute Passage',
     speedKn: 15, reachKm: 400,
     // 캐나다 해안경비대: 빨간 선체 + 흰 전방 사선 스트라이프 + 흰 상부 + 헬리데크
     hullColor: '#d81e3f',
@@ -49,7 +49,7 @@ export const ESCORT_ASSETS = {
   },
   TSR: {
     id: 'rosatom', name: '원자력 쇄빙선', org: 'Rosatomflot', flag: '🇷🇺',
-    home: { lat: 78.22, lon: 15.65 }, homeName: 'Longyearbyen',
+    home: { lat: 78.28, lon: 15.2 }, homeName: 'Isfjorden(Longyearbyen)',
     speedKn: 18, reachKm: 400,
     // Rosatomflot 원자력 쇄빙선(Arktika급): 검은 선체 + 노란(아톰플로트) 상부 + 원자로 블록
     hullColor: '#1c2530',

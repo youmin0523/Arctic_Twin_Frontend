@@ -117,6 +117,10 @@ export default function VoyageInfoPanel({
   araonDisplayPos, // App.jsx 에서 계산된 통합 아라온 위치 (Cesium marker 와 동일)
   araonControl, // Live 모드 수동 호출/복귀: { mode, onCall, onRecall } | null
   escortAsset, // 현재 항로의 호위 자산 { name, org, flag, homeName } | null
+  escortOptions, // 검증용 쇄빙선 선택 목록 [{ id, label }]
+  escortSelectedId, // 현재 선택된 쇄빙선 id
+  onEscortSelect, // (id) => void — 드롭다운 선택
+  onFlyToEscort, // () => void — 쇄빙선 위치로 카메라 이동
   onClose,
 }) {
   // 패널 접기/펼치기 — 우측으로 접으면 핸들만 남고, 다시 누르면 좌측으로 펼침
@@ -417,9 +421,34 @@ export default function VoyageInfoPanel({
             paddingBottom: 4,
           }}
         >
-          <span style={{ color: '#facc15', fontWeight: 700, letterSpacing: 1 }}>
-            🚢 {araonMeta.name_ko}
-          </span>
+          {escortOptions && onEscortSelect ? (
+            <select
+              value={escortSelectedId || 'araon'}
+              onChange={(e) => onEscortSelect(e.target.value)}
+              title="호위 쇄빙선 선택 (검증용 — 선택 시 해당 자산 모항 표시)"
+              style={{
+                background: 'rgba(15,23,42,0.9)',
+                color: '#facc15',
+                fontWeight: 700,
+                fontSize: 12,
+                border: '1px solid rgba(250,204,21,0.4)',
+                borderRadius: 4,
+                padding: '2px 6px',
+                cursor: 'pointer',
+                maxWidth: 170,
+              }}
+            >
+              {escortOptions.map((o) => (
+                <option key={o.id} value={o.id} style={{ background: '#0a0f1c' }}>
+                  🚢 {o.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span style={{ color: '#facc15', fontWeight: 700, letterSpacing: 1 }}>
+              🚢 {araonMeta.name_ko}
+            </span>
+          )}
           {araon && (
             <span
               style={{
@@ -472,6 +501,30 @@ export default function VoyageInfoPanel({
           </div>
         ) : (
           <div style={{ color: '#64748b' }}>데이터 없음</div>
+        )}
+
+        {/* 쇄빙선 위치로 카메라 이동 (검증용) */}
+        {onFlyToEscort && (
+          <button
+            type="button"
+            onClick={onFlyToEscort}
+            disabled={!araon}
+            style={{
+              width: '100%',
+              marginTop: 8,
+              padding: '5px 0',
+              borderRadius: 4,
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: araon ? 'pointer' : 'default',
+              border: '1px solid rgba(250,204,21,0.6)',
+              background: araon ? 'rgba(250,204,21,0.18)' : 'rgba(100,116,139,0.15)',
+              color: araon ? '#facc15' : '#64748b',
+            }}
+            title="현재 쇄빙선 위치로 화면 이동"
+          >
+            📍 쇄빙선 위치로 이동
+          </button>
         )}
 
         {/* Live 모드 수동 호출/복귀 컨트롤 */}
