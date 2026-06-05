@@ -120,10 +120,69 @@ export function deriveIceConditions(lon, lat, sampleIceConcentration) {
 }
 
 // //* [Modified Code] UI 가이드 및 재사용을 위해 핵심 기항 상수를 상단으로 추출 및 Export
+// (하위호환·UI 툴팁용 — NSR 기준 기본값. 항로별 임계값은 ROUTE_POLAR_PROFILES 참조)
 export const NSR_MAX_DRAFT = 12.5;
 export const NSR_MAX_BEAM = 35.0;
 export const MIN_RESCUE_DAYS = 5;
 export const MIN_TEMP_MARGIN = 10.0;
+
+// 북극 항로 키 (평가/게이트 대상)
+export const ARCTIC_ROUTE_KEYS = ['NSR', 'NWP', 'TSR'];
+
+/**
+ * 항로별 극지 운항 평가 프로파일 — 실제 규정 근거 반영.
+ *
+ *  공통(전 북극항로): IMO Polar Code(SOLAS/MARPOL 강제) — PWOM 비치, 극지 설비/인력,
+ *    PST(저온 설계온도: 최저 MDLT 대비 ≥10°C), METR(생존시간 최소 5일).
+ *  HFO 금지: MARPOL Annex I Reg.43A — 2024-07-01 사용·적재 금지(연료탱크 설계 면제·
+ *    연안국 waiver 일부 허용), 2029-07-01 전면 시행(면제·waiver 종료).
+ *  빙급 적합성: POLARIS RIO(IMO MSC.1/Circ.1519)로 각 항로의 실제 빙상에서 Step 5 판정
+ *    (인위적 최소 빙급 임계값 대신 항로 위도·빙질 기반으로 차등 — NSR/NWP/TSR 자동 구분).
+ *
+ *  항로별 차이(규정·지리 근거):
+ *   · NSR — 러 「NSR 항행규칙」: NSRA 허가(입역 15영업일~120일 전 신청, Rosatom).
+ *           대러 제재 참여국 선적 시 압류 위험 → 희망봉(CAPE) 권고. Sannikov 해협 흘수 ~13m.
+ *   · NWP — 캐 NORDREG 의무 보고(≥300GT, 2010~)·ASSPPR(Polar Code 국내이행). 제재 무관.
+ *           남측 주항로(Route 3) 대형선 흘수 <14m(Victoria 해협 ~10m).
+ *   · TSR — 중앙 북극 공해 횡단: 국가 허가체계 없음·제재 무관. 심해(흘수 제한 사실상 없음),
+ *           최고위도(~90°N)·최원격 → LEO 통신·높은 METR 필요. 빙 난이도는 POLARIS가 판정.
+ */
+export const ROUTE_POLAR_PROFILES = {
+  NSR: {
+    label: '북동항로(NSR)',
+    requiresNsraPermit: true,    // 러 NSR 항행규칙: NSRA 허가(입역 15영업일~120일 전 신청)
+    sanctionReroute: 'CAPE',     // 대러 제재 참여국 선적 → 희망봉 우회
+    maxDraft: NSR_MAX_DRAFT,     // 12.5m — Sannikov 해협 ~13m / Dmitry Laptev 6.7m(연안항로)
+    maxBeam: NSR_MAX_BEAM,       // 35m — 러 원자력쇄빙선(Arktika급 ~34m) 호송 수로
+    minRescueDays: MIN_RESCUE_DAYS, // 5일 — Polar Code METR 최소
+    minTempMargin: MIN_TEMP_MARGIN, // 10°C — Polar Code PST(최저 MDLT 대비 ≥10°C)
+    commsLatThreshold: 75.0,     // GEO 앙각 한계(~76°N) 고려 — 고위도 LEO 필요
+    defaultReroute: 'SUEZ',
+  },
+  NWP: {
+    label: '북서항로(NWP)',
+    requiresNsraPermit: false,
+    requiresNordreg: true,       // 캐 NORDREG 의무 보고(≥300GT) — 보고제(통과 차단 아님)
+    sanctionReroute: null,       // 대러 제재 무관
+    maxDraft: 14.0,              // 남측 주항로 대형선 흘수 <14m (Victoria 해협 ~10m 변형로)
+    maxBeam: 32.0,
+    minRescueDays: 7,            // 원격·SAR 열악 → 운영 METR 상향(Polar Code 5일 초과 권고)
+    minTempMargin: MIN_TEMP_MARGIN, // 10°C
+    commsLatThreshold: 74.0,
+    defaultReroute: 'SUEZ',
+  },
+  TSR: {
+    label: '북극횡단항로(TSR)',
+    requiresNsraPermit: false,
+    sanctionReroute: null,
+    maxDraft: 30.0,             // 중앙 북극 심해 — 흘수 제한 사실상 없음
+    maxBeam: 50.0,
+    minRescueDays: 10,          // 최원격 — 운영 METR 대폭 상향
+    minTempMargin: MIN_TEMP_MARGIN, // 10°C
+    commsLatThreshold: 84.0,    // ~90°N 횡단 — LEO 필수
+    defaultReroute: 'SUEZ',
+  },
+};
 
 /**
  * 5-step sequential routing decision tree.
@@ -140,29 +199,43 @@ export const MIN_TEMP_MARGIN = 10.0;
  *   iceClass, iceConditions
  * @returns {Object} { status: string, reason: string, rioScore: number|null }
  */
-export function evaluateRouting(shipData) {
-  // ── Step 1: 지정학·행정·환경 규제 필터 ─────────────────────────────
-  if (shipData.isSanctionedCountry) {
+export function evaluateRouting(shipData, routeKey = 'NSR') {
+  const profile = ROUTE_POLAR_PROFILES[routeKey];
+
+  // 비북극 항로(SUEZ/CAPE/ETC) — POLAR CODE 적합성 평가 대상이 아님
+  if (!profile) {
     return {
-      status: 'REROUTE_CAPE',
-      reason:
-        '[Step 1a] 선박 국적이 대러시아 제재 참여국입니다. NSR 통과 시 국제 제재 위반 및 선박·화물 압류 위험 → 희망봉(CAPE) 우회.',
+      status: 'NON_ARCTIC',
+      reason: '비북극 항로 — POLAR CODE 극지 적합성 평가 대상이 아닙니다. 일반 상선 항행 기준 적용.',
       rioScore: null,
     };
   }
-  if (!shipData.hasNsraPermit) {
+
+  const RL = profile.label;
+  const rerouteStatus =
+    profile.defaultReroute === 'CAPE' ? 'REROUTE_CAPE' : 'REROUTE_SUEZ';
+  const rerouteName = profile.defaultReroute === 'CAPE' ? '희망봉' : '수에즈';
+
+  // ── Step 1: 지정학·행정·환경 규제 필터 ─────────────────────────────
+  if (shipData.isSanctionedCountry && profile.sanctionReroute) {
+    const isCape = profile.sanctionReroute === 'CAPE';
+    return {
+      status: isCape ? 'REROUTE_CAPE' : 'REROUTE_SUEZ',
+      reason: `[Step 1a] 선박 국적이 대러시아 제재 참여국입니다. ${RL} 통과 시 국제 제재 위반 및 선박·화물 압류 위험 → ${isCape ? '희망봉(CAPE)' : '수에즈'} 우회.`,
+      rioScore: null,
+    };
+  }
+  if (profile.requiresNsraPermit && !shipData.hasNsraPermit) {
     return {
       status: 'REROUTE_SUEZ',
-      reason:
-        '[Step 1b] NSRA(러시아 북극항로청) 사전 운항 허가 미취득. NSR은 45일 전 신청 필수 → 수에즈 우회.',
+      reason: `[Step 1b] NSRA(러시아 북극항로청) 사전 운항 허가 미취득. ${RL}은 입역 15영업일~120일 전 신청 필수(러 NSR 항행규칙) → 수에즈 우회.`,
       rioScore: null,
     };
   }
   if (!shipData.hasPwom) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason:
-        '[Step 1b] 극지해역 운항 매뉴얼(PWOM) 미비치. IMO Polar Code 필수 문서 → 수에즈 우회.',
+      status: rerouteStatus,
+      reason: `[Step 1b] 극지해역 운항 매뉴얼(PWOM) 미비치. IMO Polar Code 필수 문서 → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
@@ -170,44 +243,43 @@ export function evaluateRouting(shipData) {
   const hasHfoExemption = shipData.hasHfoExemption || false;
   if (fuelType === 'HFO' && !hasHfoExemption) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason:
-        '[Step 1c] HFO(중질유) 사용·적재 선박으로 IMO 북극해 HFO 금지 규정(MARPOL Annex I) 위반. 면제 인증 미보유 → 수에즈 우회.',
+      status: rerouteStatus,
+      reason: `[Step 1c] HFO(중질유) 사용·적재 선박 — IMO 북극해 HFO 금지(MARPOL Annex I Reg.43A, 2024-07-01 시행 / 2029-07-01 전면) 위반. 면제·waiver 미보유 → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
 
-  // ── Step 2: 물리적 크기 필터 ─────────────────────────────────────
-  if (shipData.draft > NSR_MAX_DRAFT) {
+  // ── Step 2: 물리적 크기 필터 (항로별 해협 수심·폭) ────────────────
+  if (shipData.draft > profile.maxDraft) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason: `[Step 2a] 흘수 ${shipData.draft.toFixed(1)}m > NSR 수심 제한 ${NSR_MAX_DRAFT}m (빌키츠키·사니코프 해협). 수에즈 우회.`,
+      status: rerouteStatus,
+      reason: `[Step 2a] 흘수 ${shipData.draft.toFixed(1)}m > ${RL} 수심 제한 ${profile.maxDraft}m. ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
-  if (shipData.beam > NSR_MAX_BEAM) {
+  if (shipData.beam > profile.maxBeam) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason: `[Step 2b] 선폭 ${shipData.beam.toFixed(1)}m > 쇄빙선 수로 허용 ${NSR_MAX_BEAM}m. 에스코트 불가 → 수에즈 우회.`,
+      status: rerouteStatus,
+      reason: `[Step 2b] 선폭 ${shipData.beam.toFixed(1)}m > ${RL} 수로 허용 ${profile.maxBeam}m. 에스코트 불가 → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
 
-  // ── Step 3: Polar Code 생존·설비·통신 기준 ───────────────────────
-  if (shipData.maxRescueDays < MIN_RESCUE_DAYS) {
+  // ── Step 3: Polar Code 생존·설비·통신 기준 (항로별) ──────────────
+  if (shipData.maxRescueDays < profile.minRescueDays) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason: `[Step 3a] 생존 장비 ${shipData.maxRescueDays}일 < KR Polar Code 최소 기준 ${MIN_RESCUE_DAYS}일. SAR 대응 지연 시 승무원 안전 불보장 → 수에즈 우회.`,
+      status: rerouteStatus,
+      reason: `[Step 3a] 생존 장비 ${shipData.maxRescueDays}일 < ${RL} 최소 기준 ${profile.minRescueDays}일. SAR 대응 지연 시 승무원 안전 불보장 → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
   if (
     shipData.isTempBelowMinus10 &&
-    shipData.designTempMargin < MIN_TEMP_MARGIN
+    shipData.designTempMargin < profile.minTempMargin
   ) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason: `[Step 3b] 저온 해역(-10°C↓) 운항 시 설계 온도 여유 ${shipData.designTempMargin}°C < 권고 기준 ${MIN_TEMP_MARGIN}°C. 구조 취성 파괴 위험 → 수에즈 우회.`,
+      status: rerouteStatus,
+      reason: `[Step 3b] 저온 해역(-10°C↓) 운항 시 설계 온도 여유 ${shipData.designTempMargin}°C < ${RL} 권고 기준 ${profile.minTempMargin}°C. 구조 취성 파괴 위험 → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
@@ -218,20 +290,22 @@ export function evaluateRouting(shipData) {
   if (!shipData.hasIceNavigator) missing.push('극지 항해사');
   if (missing.length > 0) {
     return {
-      status: 'REROUTE_SUEZ',
-      reason: `[Step 3c] Polar Code 필수 설비/인력 미비: ${missing.join(', ')}. KR 이행 가이드 9~12장 요건 미충족 → 수에즈 우회.`,
+      status: rerouteStatus,
+      reason: `[Step 3c] Polar Code 필수 설비/인력 미비: ${missing.join(', ')}. KR 이행 가이드 9~12장 요건 미충족 → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
   const latitude = shipData.latitude ?? 70.0;
   const commsType = shipData.commsType || 'GEO';
-  if (latitude >= 75.0 && commsType !== 'LEO') {
+  if (latitude >= profile.commsLatThreshold && commsType !== 'LEO') {
     return {
-      status: 'REROUTE_SUEZ',
-      reason: `[Step 3d] 항로 최고 위도 ${latitude.toFixed(1)}°N ≥ 75° — GEO 위성 앙각 부족으로 통신 불가 구간 발생. Iridium/Starlink 등 LEO 통신 필수 (현재: ${commsType}) → 수에즈 우회.`,
+      status: rerouteStatus,
+      reason: `[Step 3d] ${RL} 최고 위도 ${latitude.toFixed(1)}°N ≥ ${profile.commsLatThreshold}° — GEO 위성 앙각 부족으로 통신 불가 구간 발생. Iridium/Starlink 등 LEO 통신 필수 (현재: ${commsType}) → ${rerouteName} 우회.`,
       rioScore: null,
     };
   }
+  // (빙급 적합성은 Step 5 POLARIS RIO 로 각 항로 실제 빙상에서 판정 —
+  //  IMO MSC.1/Circ.1519. 인위적 최소 빙급 임계값 미사용.)
 
   // ── Step 4: 선종별 특화 기상 필터 ────────────────────────────────
   const shipType = shipData.shipType || 'General';
@@ -242,15 +316,15 @@ export function evaluateRouting(shipData) {
   if (shipType === 'Container Ship') {
     if (waveHeight > 4.0) {
       return {
-        status: 'REROUTE_SUEZ',
-        reason: `[Step 4a] 컨테이너선 한계 파고 초과: 유의 파고 ${waveHeight.toFixed(1)}m > 4.0m. 갑판 적재 컨테이너 유실(Cargo Loss) 및 구조 손상 위험 → 수에즈 우회.`,
+        status: rerouteStatus,
+        reason: `[Step 4a] 컨테이너선 한계 파고 초과: 유의 파고 ${waveHeight.toFixed(1)}m > 4.0m. 갑판 적재 컨테이너 유실(Cargo Loss) 및 구조 손상 위험 → ${rerouteName} 우회.`,
         rioScore: null,
       };
     }
     if (shipData.isTempBelowMinus10 && waveHeight > 2.5) {
       return {
-        status: 'REROUTE_SUEZ',
-        reason: `[Step 4b] 컨테이너선 착빙(Vessel Icing) 위험: 기온 -10°C 미만 + 파고 ${waveHeight.toFixed(1)}m > 2.5m. 치명적 선체 착빙 예상, 복원력 상실 위험 → 수에즈 우회.`,
+        status: rerouteStatus,
+        reason: `[Step 4b] 컨테이너선 착빙(Vessel Icing) 위험: 기온 -10°C 미만 + 파고 ${waveHeight.toFixed(1)}m > 2.5m. 치명적 선체 착빙 예상, 복원력 상실 위험 → ${rerouteName} 우회.`,
         rioScore: null,
       };
     }
@@ -272,7 +346,7 @@ export function evaluateRouting(shipData) {
   const rio = calculateRIO(shipData.iceClass, shipData.iceConditions);
 
   if (rio >= 0) {
-    const baseReason = `[Step 5a] POLARIS RIO +${rio.toFixed(2)}. 모든 기준 충족, 현재 빙상 조건에서 NSR 정상 통과 승인.`;
+    const baseReason = `[Step 5a] POLARIS RIO +${rio.toFixed(2)}. 모든 기준 충족, 현재 빙상 조건에서 ${RL} 정상 통과 승인.`;
     if (weatherWarning) {
       return {
         status: 'NSR_RESTRICTED',
@@ -283,7 +357,7 @@ export function evaluateRouting(shipData) {
     return { status: 'NSR_APPROVED', reason: baseReason, rioScore: rio };
   }
   if (rio >= -10) {
-    const baseReason = `[Step 5b] RIO ${rio.toFixed(2)} (경계: -10≤RIO<0). 고위험 빙해역 — 쇄빙선 에스코트 필수, 권고 속도 준수, 24h 빙상 감시 조건부 통과.`;
+    const baseReason = `[Step 5b] ${RL} RIO ${rio.toFixed(2)} (경계: -10≤RIO<0). 고위험 빙해역 — 쇄빙선 에스코트 필수, 권고 속도 준수, 24h 빙상 감시 조건부 통과.`;
     return {
       status: 'NSR_RESTRICTED',
       reason: weatherWarning ? `${baseReason} | ${weatherWarning}` : baseReason,
@@ -291,8 +365,8 @@ export function evaluateRouting(shipData) {
     };
   }
   return {
-    status: 'REROUTE_SUEZ',
-    reason: `[Step 5c] RIO ${rio.toFixed(2)} < -10. POLARIS 특별 고려 대상 해역(빙하·다년생 빙 지배). 선박 설계 한계 초과, 안전 항해 계획 불가 → 수에즈 우회.`,
+    status: rerouteStatus,
+    reason: `[Step 5c] ${RL} RIO ${rio.toFixed(2)} < -10. POLARIS 특별 고려 대상 해역(빙하·다년생 빙 지배). 선박 설계 한계 초과, 안전 항해 계획 불가 → ${rerouteName} 우회.`,
     rioScore: rio,
   };
 }
