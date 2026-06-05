@@ -100,7 +100,7 @@ export default function ProximityWarningOverlay({ proximityAlert, avoidance, nav
         <div
           style={{
             position: 'absolute',
-            top: 80,
+            top: 24,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 320,
