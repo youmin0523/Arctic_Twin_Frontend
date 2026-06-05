@@ -10,8 +10,87 @@
  *  - Esri 위성은 ACAO:* 라 crossOrigin='anonymous' 로 안전하게 텍스처화 가능.
  */
 import * as THREE from 'three';
+import * as Cesium from 'cesium';
 
 const TILE = 256;
+
+// ── 2단계: 실제 고도(Cesium World Terrain) ──
+// 기존 위성뷰가 쓰는 동일 Ion 토큰/지형을 재사용. 새 토큰·프록시 불필요.
+let _terrainProvider = null;
+let _terrainPromise = null;
+function ensureIonToken() {
+  if (!Cesium.Ion.defaultAccessToken) {
+    Cesium.Ion.defaultAccessToken =
+      import.meta.env.VITE_CESIUM_ION_TOKEN ||
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3MTJlMTZiNS02MzQ1LTRmZGMtOWM0Ni1kZWJkMzQxZTJhMTEiLCJpZCI6NDA2NTU5LCJpYXQiOjE3NzM5OTY1Mjl9.lpSbE0Dchaf-IEx0J8MkS6FoisyRwd4nfSZ0GyFciLI';
+  }
+}
+async function getTerrainProvider() {
+  if (_terrainProvider) return _terrainProvider;
+  if (!_terrainPromise) {
+    ensureIonToken();
+    _terrainPromise = Cesium.createWorldTerrainAsync()
+      .then((tp) => {
+        _terrainProvider = tp;
+        return tp;
+      })
+      .catch((e) => {
+        console.warn('[realTerrain] World Terrain 로드 실패:', e?.message);
+        return null;
+      });
+  }
+  return _terrainPromise;
+}
+
+/**
+ * 선박 주변 실제 고도(m) 격자 샘플. 위성뷰와 동일한 Cesium World Terrain 사용.
+ * @returns {Promise<null | {
+ *   N, lat0, lon0, dLat, dLon,
+ *   heightAt: (lat, lon) => number,  // 양선형 보간 고도(m)
+ * }>}
+ */
+export async function loadElevationAround(centerLat, centerLon, opts = {}) {
+  const tp = await getTerrainProvider();
+  if (!tp) return null;
+  const N = opts.grid ?? 80;
+  const cosLat = Math.max(0.18, Math.cos((centerLat * Math.PI) / 180));
+  const halfLat = opts.halfLat ?? 0.6;
+  const halfLon = (opts.halfLon ?? 0.6) / cosLat;
+  const lat0 = centerLat - halfLat;
+  const lon0 = centerLon - halfLon;
+  const dLat = (2 * halfLat) / (N - 1);
+  const dLon = (2 * halfLon) / (N - 1);
+  const carts = new Array(N * N);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      carts[j * N + i] = Cesium.Cartographic.fromDegrees(lon0 + i * dLon, lat0 + j * dLat);
+    }
+  }
+  try {
+    await Cesium.sampleTerrain(tp, opts.level ?? 11, carts);
+  } catch (e) {
+    console.warn('[realTerrain] sampleTerrain 실패:', e?.message);
+    return null;
+  }
+  const heights = new Float32Array(N * N);
+  for (let k = 0; k < N * N; k++) heights[k] = carts[k].height || 0;
+  return {
+    N, lat0, lon0, dLat, dLon,
+    heightAt(lat, lon) {
+      const fj = (lat - lat0) / dLat;
+      const fi = (lon - lon0) / dLon;
+      if (fj < 0 || fi < 0 || fj > N - 1 || fi > N - 1) return 0;
+      const j0 = Math.floor(fj), i0 = Math.floor(fi);
+      const j1 = Math.min(N - 1, j0 + 1), i1 = Math.min(N - 1, i0 + 1);
+      const tj = fj - j0, ti = fi - i0;
+      const h00 = heights[j0 * N + i0], h10 = heights[j0 * N + i1];
+      const h01 = heights[j1 * N + i0], h11 = heights[j1 * N + i1];
+      const a = h00 + (h10 - h00) * ti;
+      const b = h01 + (h11 - h01) * ti;
+      return a + (b - a) * tj;
+    },
+  };
+}
 const IMAGERY_URL = (z, x, y) =>
   `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 

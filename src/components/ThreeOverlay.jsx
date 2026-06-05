@@ -11,8 +11,8 @@ import { getSeaState } from '../services/shipSimulator';
 // 회피 로직이 쓰는 전역 0.05° 육지 마스크(섬·내륙 포함)를 그대로 샘플링하여
 // 선미추적 뷰의 실제 해안선을 그린다 → 회피 경계와 시각이 100% 일치.
 import { isLandGlobal, isGlobalLandMaskReady } from '../services/landMaskGlobal';
-// 실사 지형(1단계): 실제 위성 이미지 드레이프
-import { loadImageryAround } from '../services/realTerrain';
+// 실사 지형: 실제 위성 이미지(1단계) + 실제 고도(2단계, Cesium DEM)
+import { loadImageryAround, loadElevationAround } from '../services/realTerrain';
 // ── Constants ────────────────────────────────────────────────────────────────
 const MOUSE_SENS = 0.0004;
 const MAX_ROT = 0.03;
@@ -1237,7 +1237,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
   // 원점으로 배치 → 장거리 항해의 투영 누적오차 없이 육지가 항상 배 밑에 정확히 옴.
   // 선박이 LAND_REBUILD_DEG 이상 이동하면 위 effect가 본 함수를 재호출(재중심화).
   const buildLandMasses = useCallback(
-    (centerLat, centerLon, imagery = null) => {
+    (centerLat, centerLon, imagery = null, elev = null) => {
       const { scene } = ctx.current;
       if (!scene) return;
 
@@ -1273,6 +1273,73 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         x: sx + ((lon - centerLon) * mPerDegLon) / LAND_SCENE_SCALE,
         z: sz + (-(lat - centerLat) * METERS_PER_DEGREE_LAT) / LAND_SCENE_SCALE,
       });
+
+      // ── 실사 지형(2단계): 실제 고도(Cesium DEM) + 위성 텍스처 스무스 하이트필드 ──
+      // elev 격자를 연속 삼각망으로 만들고 실제 높이로 변위, 정점법선으로 매끈한 음영.
+      // 바다(고도≤SEA)는 y=0(수면), 전부 바다인 사각형은 스킵(Three 바다 노출).
+      if (elev) {
+        const N = elev.N;
+        const SEA = 0.8; // m 이상이면 육지
+        const latOf = (j) => elev.lat0 + j * elev.dLat;
+        const lonOf = (i) => elev.lon0 + i * elev.dLon;
+        const pos = [];
+        const uv = [];
+        const col = [];
+        const mkV = (lat, lon) => {
+          const p = ll(lat, lon);
+          const h = elev.heightAt(lat, lon);
+          const land = h > SEA;
+          return {
+            x: p.x,
+            y: land ? Math.max(3, h / LAND_SCENE_SCALE) : 0,
+            z: p.z,
+            lat,
+            lon,
+            land,
+          };
+        };
+        const push = (v) => {
+          pos.push(v.x, v.y, v.z);
+          const t = imagery ? imagery.uvOf(v.lat, v.lon) : [0, 0];
+          uv.push(t[0], t[1]);
+          col.push(1, 1, 1);
+        };
+        for (let j = 0; j < N - 1; j++) {
+          for (let i = 0; i < N - 1; i++) {
+            const a = mkV(latOf(j), lonOf(i));
+            const b = mkV(latOf(j), lonOf(i + 1));
+            const c = mkV(latOf(j + 1), lonOf(i + 1));
+            const d = mkV(latOf(j + 1), lonOf(i));
+            if (!(a.land || b.land || c.land || d.land)) continue; // 전부 바다 → 스킵
+            push(a); push(b); push(c);
+            push(a); push(c); push(d);
+          }
+        }
+        if (pos.length === 0) return; // 주변 전부 바다
+        const geo = trackDisposable(new THREE.BufferGeometry());
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+        geo.computeVertexNormals(); // 매끈한 음영(faceting 제거)
+        const mat = trackDisposable(
+          new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 1.0,
+            metalness: 0.0,
+            side: THREE.DoubleSide,
+            fog: false,
+            map: imagery ? imagery.texture : null,
+            emissive: 0x1c1c1c,
+            emissiveIntensity: 0.14,
+          }),
+        );
+        const grp = new THREE.Group();
+        grp.add(new THREE.Mesh(geo, mat));
+        scene.add(grp);
+        ctx.current.landGroup = grp;
+        console.info(`[land] REAL terrain N=${N} verts=${pos.length / 3}`);
+        return;
+      }
 
       // 가시 영역: 경도는 cos(lat)로 보정해 화면 폭을 채움
       const cosC = Math.max(0.18, Math.cos((centerLat * Math.PI) / 180));
@@ -2448,11 +2515,15 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         const token = (ctx.current.terrainToken = (ctx.current.terrainToken || 0) + 1);
         const clat = lat;
         const clon = lon;
-        loadImageryAround(clat, clon)
-          .then((imagery) => {
-            if (imagery && ctx.current.terrainToken === token && ctx.current.scene) {
-              buildLandMasses(clat, clon, imagery);
-            }
+        // 실제 위성 이미지 + 실제 고도(Cesium DEM) 병렬 로드 → 실사 지형 재빌드.
+        Promise.all([
+          loadImageryAround(clat, clon, { halfLat: 0.6, halfLon: 0.6 }),
+          loadElevationAround(clat, clon),
+        ])
+          .then(([imagery, elev]) => {
+            if (ctx.current.terrainToken !== token || !ctx.current.scene) return;
+            if (elev) buildLandMasses(clat, clon, imagery, elev); // 실사(고도+위성)
+            else if (imagery) buildLandMasses(clat, clon, imagery); // 위성만 폴백
           })
           .catch(() => {});
       }
