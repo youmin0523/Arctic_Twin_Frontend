@@ -32,7 +32,7 @@ const KEYFRAMES = `
 }
 `;
 
-export default function ProximityWarningOverlay({ proximityAlert, avoidance }) {
+export default function ProximityWarningOverlay({ proximityAlert, avoidance, nav }) {
   const level = proximityAlert?.level || 'none';
   const type = proximityAlert?.type;
   const avoidActive = !!avoidance?.active;
@@ -49,9 +49,28 @@ export default function ProximityWarningOverlay({ proximityAlert, avoidance }) {
     ? 'rgba(239,68,68,0.55)'
     : 'rgba(245,158,11,0.4)';
 
-  const bannerText = isCritical
-    ? `🚨 ${typeLabel} 충돌 위험! ${proximityAlert.message || ''}`
-    : `⚠️ 전방 ${typeLabel} 접근 — ${proximityAlert.message || ''}`;
+  // ── 방향(좌현/우현 + 화살표) — 육지 경고에 실제 방위 반영 ──
+  // nav.landRel: +우현 / −좌현 / 0 정면 (App에서 부채꼴 스캔으로 계산)
+  const rel = type === 'land' ? nav?.landRel : null;
+  const km = type === 'land' ? nav?.landDistKm : null;
+  let dirLabel = '전방';
+  let dirArrow = '▲';
+  if (typeof rel === 'number' && Math.abs(rel) > 5) {
+    if (rel < 0) { dirLabel = `좌현 ${Math.abs(rel)}°`; dirArrow = '◀'; }
+    else { dirLabel = `우현 ${rel}°`; dirArrow = '▶'; }
+  }
+  // 거리: 실시간 nav 값 우선, 없으면 proximityAlert.message 폴백
+  const distText =
+    type === 'land' && km != null ? `${km}km` : proximityAlert.message || '';
+
+  const bannerText =
+    type === 'land'
+      ? isCritical
+        ? `🚨 ${dirArrow} ${dirLabel} 육지 충돌 위험! — ${distText}`
+        : `⚠️ ${dirArrow} ${dirLabel} 육지 접근 — ${distText}`
+      : isCritical
+        ? `🚨 ${typeLabel} 충돌 위험! ${proximityAlert.message || ''}`
+        : `⚠️ 전방 ${typeLabel} 접근 — ${proximityAlert.message || ''}`;
 
   const avoidTypeLabel = avoidance?.type === 'land' ? '육지' : '빙하';
   const avoidIcon = avoidance?.type === 'land' ? '🏔️' : '🧊';

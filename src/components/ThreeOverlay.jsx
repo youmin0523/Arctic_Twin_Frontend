@@ -8,6 +8,9 @@ import React, {
 import * as THREE from 'three';
 // sea-state 합성 모델은 shipSimulator 단일 출처를 재사용 (중복 정의 제거)
 import { getSeaState } from '../services/shipSimulator';
+// 회피 로직이 쓰는 전역 0.05° 육지 마스크(섬·내륙 포함)를 그대로 샘플링하여
+// 선미추적 뷰의 실제 해안선을 그린다 → 회피 경계와 시각이 100% 일치.
+import { isLandGlobal, isGlobalLandMaskReady } from '../services/landMaskGlobal';
 // ── Constants ────────────────────────────────────────────────────────────────
 const MOUSE_SENS = 0.0004;
 const MAX_ROT = 0.03;
@@ -24,6 +27,14 @@ const METERS_PER_DEGREE_LON_AT_EQUATOR = 111319.491;
 const FOAM_COUNT = 60;
 const MAX_LOCAL_ICEBERGS = 180;
 const SHIP_BASE_Y = 5; // 선체 기본 수선 높이 (수면 위로 올리기)
+
+// ── 육지(해안선) 렌더 파라미터 ──
+const LAND_RES = 0.05; // 전역 마스크 해상도(°) — isLandGlobal 격자와 동일
+const LAND_RADIUS_DEG = 1.1; // 위도 기준 샘플 반경(화면 가시영역 + 이동 여유)
+const LAND_TOP = 11; // 수면 위 지면 높이 (해안선 실루엣)
+const LAND_BOTTOM = -8; // 수면 아래 바닥 (바다와 틈새 방지)
+const LAND_SCENE_SCALE = 1.5; // 선박 좌표계와 동일한 압축비
+const LAND_REBUILD_DEG = 0.35; // 이 거리(°≈39km) 이상 이동 시 주변 육지 재생성
 
 // //! [Original Code] 기존 빙산 종류별 크기 (높이가 비현실적으로 높게 설정됨)
 // const ICE_TYPES = [
@@ -434,11 +445,121 @@ function makeIceGeo(typeName, w, h, d) {
   return g;
 }
 
+// 항로별 호위 쇄빙선 3D 모델 기본 시각 특성 (asset.visual 미지정 시 = 아라온)
+const ESCORT_DEFAULT_VISUAL = {
+  hull: 0xc0392b, deck: 0x6b1e17, sup: 0xecf0f1, window: 0x1a365d,
+  accent: 0xe67e22, gray: 0x4a5568, funnelBand: 0xc0392b,
+  helideck: true, crane: true, stripe: null, reactor: false,
+};
+
+// 자산 visual 에 맞춰 쇄빙선 3D 그룹을 생성. { group, mesh } 반환.
+//  · 공통: flared 쇄빙 선체 + 브리지 + 마스트 + 펀넬
+//  · crane=true  → 후방 A-프레임 크레인(아라온)
+//  · stripe!=null → 선체 양현 사선 흰 스트라이프(캐나다 해안경비대)
+//  · reactor=true → 원자로 격납 돔(원자력 쇄빙선)
+function buildIcebreakerMesh(matScale, trackDisposable, visual) {
+  const V = visual || ESCORT_DEFAULT_VISUAL;
+  const group = new THREE.Group();
+  const mesh = new THREE.Group();
+  const mk = (geo, mat, px, py, pz, rx = 0, ry = 0) => {
+    trackDisposable(geo);
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(px, py, pz);
+    m.rotation.x = rx;
+    m.rotation.y = ry;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    mesh.add(m);
+  };
+  const hull = matScale(V.hull, 0.6, 0.3);
+  const dark = matScale(V.deck, 0.7, 0.25);
+  const white = matScale(V.sup, 0.2, 0.15);
+  const win = matScale(V.window, 0.9, 0.1);
+  const accent = matScale(V.accent, 0.3, 0.5);
+  const gray = matScale(V.gray, 0.7, 0.3);
+
+  // ── 선체 (flared icebreaker bow) ──
+  mk(new THREE.BoxGeometry(20, 10, 115), hull, 0, 0, 0);
+  mk(new THREE.BoxGeometry(21, 4, 118), dark, 0, -6, 0);
+  for (let i = 0; i < 4; i++) {
+    const s = 1 - i * 0.18;
+    mk(new THREE.BoxGeometry(20 * s, 2.5, 10), hull, 0, -1 - i * 1.2, -55 - i * 4);
+  }
+  mk(new THREE.CylinderGeometry(0, 11, 22, 4), hull, 0, 0, -66, 0, Math.PI / 4);
+
+  // ── 캐나다 해안경비대 사선 흰 스트라이프 (양현) ──
+  if (V.stripe) {
+    const stripeMat = matScale(V.stripe, 0.2, 0.4);
+    mk(new THREE.BoxGeometry(0.8, 6, 40), stripeMat, 10.4, 1, -8, 0, 0.16);
+    mk(new THREE.BoxGeometry(0.8, 6, 40), stripeMat, -10.4, 1, -8, 0, -0.16);
+  }
+
+  // ── 상부구조(브리지 블록) ──
+  mk(new THREE.BoxGeometry(16, 8, 28), white, 0, 9, -8);
+  mk(new THREE.BoxGeometry(15, 6, 18), white, 0, 16, -12);
+  mk(new THREE.BoxGeometry(18, 4, 14), white, 0, 21, -16);
+  mk(new THREE.BoxGeometry(17, 2.5, 12), win, 0, 21.2, -17);
+
+  // ── 마스트 & 안테나 ──
+  mk(new THREE.CylinderGeometry(0.5, 0.7, 18, 8), gray, 0, 30, -14);
+  mk(new THREE.BoxGeometry(7, 0.4, 2), gray, 0, 27, -14);
+  mk(new THREE.BoxGeometry(5, 0.4, 2), gray, 0, 31, -14);
+
+  // ── 선수 보강선 ──
+  mk(new THREE.BoxGeometry(10, 0.3, 1), white, 0, 2, -45);
+
+  // ── 전방 헬리데크 ──
+  if (V.helideck) {
+    mk(new THREE.CylinderGeometry(7, 7, 0.5, 16), white, 0, 6, -32);
+    mk(new THREE.BoxGeometry(5, 0.1, 1), dark, 0, 6.3, -32);
+    mk(new THREE.BoxGeometry(1, 0.1, 5), dark, 0, 6.3, -32);
+  }
+
+  // ── 후방 갑판 ──
+  mk(new THREE.BoxGeometry(18, 0.5, 30), gray, 0, 5.5, 25);
+
+  // ── 후방 A-프레임 크레인 (아라온 트레이드마크) ──
+  if (V.crane) {
+    mk(new THREE.BoxGeometry(1.5, 15, 1.5), accent, -7, 13, 25);
+    mk(new THREE.BoxGeometry(1.5, 15, 1.5), accent, 7, 13, 25);
+    mk(new THREE.BoxGeometry(16, 1.5, 1.5), accent, 0, 20, 25);
+    mk(new THREE.BoxGeometry(1.2, 1.2, 20), accent, 0, 18, 30, 0.3);
+    mk(new THREE.BoxGeometry(10, 3, 6), accent, 0, 7.5, 20);
+  }
+
+  // ── 원자로 격납 블록 (원자력 쇄빙선) ──
+  if (V.reactor) {
+    mk(new THREE.CylinderGeometry(5, 5, 8, 16), gray, 0, 10, 22);
+    mk(
+      new THREE.SphereGeometry(5, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+      accent,
+      0,
+      14,
+      22,
+    );
+    mk(new THREE.CylinderGeometry(0.5, 0.6, 12, 8), gray, 0, 22, 22);
+  }
+
+  // ── 펀넬(연돌) + 상단 띠 ──
+  mk(new THREE.BoxGeometry(4, 8, 5), white, 0, 14, -2);
+  mk(new THREE.BoxGeometry(4.2, 1.2, 5.2), matScale(V.funnelBand, 0.4, 0.4), 0, 17.5, -2);
+
+  // ── 구명정 데이빗 ──
+  mk(new THREE.BoxGeometry(4, 1.5, 1.5), accent, -8, 12, -5);
+  mk(new THREE.BoxGeometry(4, 1.5, 1.5), accent, 8, 12, -5);
+
+  // 시각 가독성을 위해 본선(2.8x)보다 큰 스케일로 부스트
+  mesh.scale.set(4.5, 4.5, 4.5);
+  mesh.position.y = SHIP_BASE_Y;
+  group.add(mesh);
+  return { group, mesh };
+}
+
 // =============================================================================
 // ThreeOverlay Component
 // =============================================================================
 const ThreeOverlay = forwardRef(function ThreeOverlay(
-  { visible, shipState, specs, mode, baseRef, manualMode },
+  { visible, shipState, specs, mode, baseRef, manualMode, escortAsset },
   ref,
 ) {
   const canvasRef = useRef(null);
@@ -1061,105 +1182,14 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       ctx.current.wakeLastT = 0;        // 마지막 push 시각 (ms)
       ctx.current.wakeLastPos = null;   // 마지막 push 위치 (중복 방지)
 
-      // ── 아라온호 3D 모델 (실제 Araon 기반 — 빨간 선체 + 흰 상부 + 주황 크레인) ──
-      const araonGroup = new THREE.Group();
-      const araonMesh = new THREE.Group();
-      const araonHelper = (group) => (geo, mat, px, py, pz, rx = 0, ry = 0) => {
-        trackDisposable(geo);
-        const m = new THREE.Mesh(geo, mat);
-        m.position.set(px, py, pz);
-        m.rotation.x = rx;
-        m.rotation.y = ry;
-        m.castShadow = true;
-        m.receiveShadow = true;
-        group.add(m);
-      };
-      const mkA = araonHelper(araonMesh);
-
-      // Araon 머티리얼 (실제 아라온 색상)
-      const araonRed = matScale(0xc0392b, 0.6, 0.3);     // 선체 빨강
-      const araonDark = matScale(0x6b1e17, 0.7, 0.25);   // 하단 어두운 부분
-      const araonWhite = matScale(0xecf0f1, 0.2, 0.15);  // 상부구조 흰색
-      const araonWindow = matScale(0x1a365d, 0.9, 0.1);  // 브릿지 창 (진한 파랑)
-      const araonOrange = matScale(0xe67e22, 0.3, 0.5);  // 크레인 주황
-      const araonGray = matScale(0x4a5568, 0.7, 0.3);    // 마스트/디테일
-
-      // Araon 실제 크기: 길이 111m, 폭 19m, 흘수 6.8m
-      // shipMesh3 scale(2.8x) 매칭을 위해 raw 크기는 본선과 비슷한 스케일로
-
-      // ── 선체 (flared icebreaker bow, 빨강) ──
-      mkA(new THREE.BoxGeometry(20, 10, 115), araonRed, 0, 0, 0);
-      mkA(new THREE.BoxGeometry(21, 4, 118), araonDark, 0, -6, 0);
-      // 쇄빙 뱃머리 — tapered forward
-      for (let i = 0; i < 4; i++) {
-        const s = 1 - i * 0.18;
-        mkA(
-          new THREE.BoxGeometry(20 * s, 2.5, 10),
-          araonRed,
-          0,
-          -1 - i * 1.2,
-          -55 - i * 4,
-        );
-      }
-      mkA(
-        new THREE.CylinderGeometry(0, 11, 22, 4),
-        araonRed,
-        0,
-        0,
-        -66,
-        0,
-        Math.PI / 4,
+      // ── 호위 쇄빙선 3D 모델 (항로별 자산 특성 반영, 재구성 가능) ──
+      // matScale 을 ctx 에 보관 → 자산 전환 시 setEscortAsset 이 재사용해 재구성.
+      ctx.current.matScale = matScale;
+      const { group: araonGroup, mesh: araonMesh } = buildIcebreakerMesh(
+        matScale,
+        trackDisposable,
+        ctx.current.escortVisual || ESCORT_DEFAULT_VISUAL,
       );
-
-      // ── 흰색 상부구조 (중앙 선교 블록) ──
-      mkA(new THREE.BoxGeometry(16, 8, 28), araonWhite, 0, 9, -8);
-      mkA(new THREE.BoxGeometry(15, 6, 18), araonWhite, 0, 16, -12); // 2단
-      mkA(new THREE.BoxGeometry(18, 4, 14), araonWhite, 0, 21, -16); // 브릿지 윙
-
-      // 브릿지 파노라마 창 (선수 방향)
-      mkA(new THREE.BoxGeometry(17, 2.5, 12), araonWindow, 0, 21.2, -17);
-
-      // ── 마스트 & 안테나 ──
-      mkA(new THREE.CylinderGeometry(0.5, 0.7, 18, 8), araonGray, 0, 30, -14);
-      mkA(new THREE.BoxGeometry(7, 0.4, 2), araonGray, 0, 27, -14);
-      mkA(new THREE.BoxGeometry(5, 0.4, 2), araonGray, 0, 31, -14);
-
-      // ── 선수 흰 크로스 마크 (reinforced bow line) ──
-      mkA(new THREE.BoxGeometry(10, 0.3, 1), araonWhite, 0, 2, -45);
-
-      // ── 전방 헬리데크 (상부구조 앞쪽) ──
-      mkA(new THREE.CylinderGeometry(7, 7, 0.5, 16), araonWhite, 0, 6, -32);
-      // H 마크
-      mkA(new THREE.BoxGeometry(5, 0.1, 1), araonDark, 0, 6.3, -32);
-      mkA(new THREE.BoxGeometry(1, 0.1, 5), araonDark, 0, 6.3, -32);
-
-      // ── 후방 갑판 (오픈 데크) ──
-      mkA(new THREE.BoxGeometry(18, 0.5, 30), araonGray, 0, 5.5, 25);
-
-      // ── 후방 A-frame / 크레인 (아라온 트레이드마크) ──
-      // 주 크레인 기둥 두 개
-      mkA(new THREE.BoxGeometry(1.5, 15, 1.5), araonOrange, -7, 13, 25);
-      mkA(new THREE.BoxGeometry(1.5, 15, 1.5), araonOrange, 7, 13, 25);
-      // 크레인 상단 가로대
-      mkA(new THREE.BoxGeometry(16, 1.5, 1.5), araonOrange, 0, 20, 25);
-      // 중앙 크레인 붐
-      mkA(new THREE.BoxGeometry(1.2, 1.2, 20), araonOrange, 0, 18, 30, 0.3);
-      // 크레인 베이스 박스
-      mkA(new THREE.BoxGeometry(10, 3, 6), araonOrange, 0, 7.5, 20);
-
-      // ── 펀넬(연돌) ──
-      mkA(new THREE.BoxGeometry(4, 8, 5), araonWhite, 0, 14, -2);
-      mkA(new THREE.BoxGeometry(4.2, 1.2, 5.2), araonRed, 0, 17.5, -2); // 상단 빨간 띠
-
-      // ── 구명정 데이빗 (양쪽) ──
-      mkA(new THREE.BoxGeometry(4, 1.5, 1.5), araonOrange, -8, 12, -5);
-      mkA(new THREE.BoxGeometry(4, 1.5, 1.5), araonOrange, 8, 12, -5);
-
-      // 실제 아라온(~111m)은 상선(~290m)보다 작지만 시각적 가독성을 위해
-      // 본선(2.8x) 보다 더 큰 스케일로 부스트
-      araonMesh.scale.set(4.5, 4.5, 4.5);
-      araonMesh.position.y = SHIP_BASE_Y;
-      araonGroup.add(araonMesh);
       araonGroup.visible = false;
       scene.add(araonGroup);
 
@@ -1195,103 +1225,173 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
     ctx.current.foamPoints = foamPoints;
   }, [trackDisposable]);
 
-  // -- Land masses --
+  // -- Land masses (실제 0.05° 전역 마스크 기반 해안선) --
+  // 선박 현재 위치(centerLat/Lon) 주변 ±LAND_RADIUS_DEG 영역을 마스크에서 샘플링하여
+  // 섬·반도·내륙을 '수면 위 입체 지면'으로 렌더. 패치는 선박의 현재 scene 위치를
+  // 원점으로 배치 → 장거리 항해의 투영 누적오차 없이 육지가 항상 배 밑에 정확히 옴.
+  // 선박이 LAND_REBUILD_DEG 이상 이동하면 위 effect가 본 함수를 재호출(재중심화).
   const buildLandMasses = useCallback(
-    (baseLat, baseLon) => {
+    (centerLat, centerLon) => {
       const { scene } = ctx.current;
-      if (ctx.current.landGroup) scene.remove(ctx.current.landGroup);
+      if (!scene) return;
+
+      // 이전 육지 정리 (재빌드 시 메모리 누수 방지)
+      if (ctx.current.landGroup) {
+        scene.remove(ctx.current.landGroup);
+        ctx.current.landGroup.traverse((o) => {
+          if (o.geometry) o.geometry.dispose();
+          if (o.material) o.material.dispose();
+        });
+        ctx.current.landGroup = null;
+      }
+
+      // 마스크 미로드 시 육지 없이 종료 — 로드 완료 후 재호출됨
+      if (!isGlobalLandMaskReady()) return;
+
+      // 패치 원점 = 선박 현재 scene 위치(없으면 0,0). 셀은 선박 기준 미터 오프셋으로 배치.
+      const ship = ctx.current.shipGroup3;
+      const sx = ship ? ship.position.x : 0;
+      const sz = ship ? ship.position.z : 0;
+      const mPerDegLon =
+        METERS_PER_DEGREE_LON_AT_EQUATOR * Math.cos((centerLat * Math.PI) / 180);
+      const ll = (lat, lon) => ({
+        x: sx + ((lon - centerLon) * mPerDegLon) / LAND_SCENE_SCALE,
+        z: sz + (-(lat - centerLat) * METERS_PER_DEGREE_LAT) / LAND_SCENE_SCALE,
+      });
+
+      // 가시 영역: 경도는 cos(lat)로 보정해 화면 폭을 채움
+      const cosC = Math.max(0.18, Math.cos((centerLat * Math.PI) / 180));
+      const latR = LAND_RADIUS_DEG;
+      const lonR = LAND_RADIUS_DEG / cosC;
+      const snap = (v) => Math.round(v / LAND_RES) * LAND_RES;
+      const lat0 = snap(centerLat - latR);
+      const lon0 = snap(centerLon - lonR);
+      const nLat = Math.round((2 * latR) / LAND_RES) + 1;
+      const nLon = Math.round((2 * lonR) / LAND_RES) + 1;
+      if (nLat <= 0 || nLon <= 0 || nLat * nLon > 60000) return; // 안전 가드
+
+      const wrap = (x) => (((x + 180) % 360) + 360) % 360 - 180;
+      const latAt = (j) => lat0 + j * LAND_RES;
+      const lonAt = (i) => lon0 + i * LAND_RES;
+
+      // 1) 육지 여부 격자 채우기
+      const isL = new Uint8Array(nLat * nLon);
+      for (let j = 0; j < nLat; j++) {
+        const la = latAt(j);
+        if (la < -90 || la > 90) continue;
+        for (let i = 0; i < nLon; i++) {
+          if (isLandGlobal(la, wrap(lonAt(i)))) isL[j * nLon + i] = 1;
+        }
+      }
+      const cellAt = (j, i) =>
+        j < 0 || j >= nLat || i < 0 || i >= nLon ? 0 : isL[j * nLon + i];
+
+      // 2) 메쉬 생성: 육지 셀 윗면 + 물과 접한 가장자리에만 측벽(해안 절벽)
+      const positions = [];
+      const normals = [];
+      const colors = [];
+      const half = LAND_RES / 2;
+      const pushTri = (a, b, c, n, col) => {
+        positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        for (let k = 0; k < 3; k++) {
+          normals.push(n.x, n.y, n.z);
+          colors.push(col[0], col[1], col[2]);
+        }
+      };
+      const pushQuad = (p0, p1, p2, p3, n, col) => {
+        pushTri(p0, p1, p2, n, col);
+        pushTri(p0, p2, p3, n, col);
+      };
+      const TOP = [0.27, 0.4, 0.24]; // 해안 지면(녹색)
+      const HI = [0.42, 0.5, 0.33]; // 내륙 고지(밝은 카키)
+      const CLIFF = [0.3, 0.32, 0.26]; // 해안 절벽(어두운 톤)
+      const UP = { x: 0, y: 1, z: 0 };
+
+      for (let j = 0; j < nLat; j++) {
+        const la = latAt(j);
+        if (la < -90 || la > 90) continue;
+        for (let i = 0; i < nLon; i++) {
+          if (!isL[j * nLon + i]) continue;
+          const lo = lonAt(i);
+          const c00 = ll(la - half, lo - half);
+          const c10 = ll(la - half, lo + half);
+          const c11 = ll(la + half, lo + half);
+          const c01 = ll(la + half, lo - half);
+          const inland =
+            cellAt(j + 1, i) &&
+            cellAt(j - 1, i) &&
+            cellAt(j, i + 1) &&
+            cellAt(j, i - 1);
+          const topCol = inland ? HI : TOP;
+          // 윗면
+          pushQuad(
+            { x: c00.x, y: LAND_TOP, z: c00.z },
+            { x: c10.x, y: LAND_TOP, z: c10.z },
+            { x: c11.x, y: LAND_TOP, z: c11.z },
+            { x: c01.x, y: LAND_TOP, z: c01.z },
+            UP,
+            topCol,
+          );
+          // 물과 접한 변에만 측벽
+          if (!cellAt(j, i + 1)) {
+            pushQuad(
+              { x: c10.x, y: LAND_TOP, z: c10.z },
+              { x: c11.x, y: LAND_TOP, z: c11.z },
+              { x: c11.x, y: LAND_BOTTOM, z: c11.z },
+              { x: c10.x, y: LAND_BOTTOM, z: c10.z },
+              { x: 1, y: 0, z: 0 },
+              CLIFF,
+            );
+          }
+          if (!cellAt(j, i - 1)) {
+            pushQuad(
+              { x: c01.x, y: LAND_TOP, z: c01.z },
+              { x: c00.x, y: LAND_TOP, z: c00.z },
+              { x: c00.x, y: LAND_BOTTOM, z: c00.z },
+              { x: c01.x, y: LAND_BOTTOM, z: c01.z },
+              { x: -1, y: 0, z: 0 },
+              CLIFF,
+            );
+          }
+          if (!cellAt(j + 1, i)) {
+            pushQuad(
+              { x: c11.x, y: LAND_TOP, z: c11.z },
+              { x: c01.x, y: LAND_TOP, z: c01.z },
+              { x: c01.x, y: LAND_BOTTOM, z: c01.z },
+              { x: c11.x, y: LAND_BOTTOM, z: c11.z },
+              { x: 0, y: 0, z: -1 },
+              CLIFF,
+            );
+          }
+          if (!cellAt(j - 1, i)) {
+            pushQuad(
+              { x: c00.x, y: LAND_TOP, z: c00.z },
+              { x: c10.x, y: LAND_TOP, z: c10.z },
+              { x: c10.x, y: LAND_BOTTOM, z: c10.z },
+              { x: c00.x, y: LAND_BOTTOM, z: c00.z },
+              { x: 0, y: 0, z: 1 },
+              CLIFF,
+            );
+          }
+        }
+      }
+
+      if (positions.length === 0) return; // 주변이 전부 바다 → 육지 없음
+
+      const geo = trackDisposable(new THREE.BufferGeometry());
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      const mat = trackDisposable(
+        new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.95,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+        }),
+      );
       const landGroup = new THREE.Group();
-
-      const latRad = (baseLat * Math.PI) / 180;
-      const mPerDegLon = METERS_PER_DEGREE_LON_AT_EQUATOR * Math.cos(latRad);
-
-      function ll(lat, lon) {
-        return {
-          x: ((lon - baseLon) * mPerDegLon) / 1.5,
-          z: (-(lat - baseLat) * METERS_PER_DEGREE_LAT) / 1.5,
-        };
-      }
-
-      // 육지: 반투명 평면으로 "저기 육지다" 감각만 제공.
-      // 높이 2 유닛, 수면 아래(y=-1) 배치 → 선박과 절대 충돌 안 함.
-      // opacity 0.18 → 물 위에 은은한 녹색 윤곽. 조악한 벽 느낌 제거.
-      function addLand(lat1, lon1, lat2, lon2, h, color) {
-        const p1 = ll(lat1, lon1);
-        const p2 = ll(lat2, lon2);
-        const w = Math.abs(p2.x - p1.x);
-        const d = Math.abs(p2.z - p1.z);
-        if (w < 100 || d < 100) return;
-        const geo = trackDisposable(new THREE.BoxGeometry(w, h, d));
-        const mat = trackDisposable(
-          new THREE.MeshStandardMaterial({
-            color,
-            roughness: 0.9,
-            metalness: 0.0,
-            transparent: true,
-            opacity: 0.18,
-            depthWrite: false,
-          }),
-        );
-        const m = new THREE.Mesh(geo, mat);
-        // 윗면 y=-1 (수면 아래) → 파도 메쉬 아래에서 은은하게 비침
-        m.position.set((p1.x + p2.x) / 2, -h / 2 - 1, (p1.z + p2.z) / 2);
-        m.renderOrder = -1; // 바다보다 먼저 렌더 → 블렌딩 자연스럽게
-        landGroup.add(m);
-      }
-
-      // ── 해안 1단 (얇고 넓음, 어두운 녹색) ──
-      // Korean Peninsula
-      addLand(34.0, 126.0, 38.5, 130.0, 6, 0x2a3f22);
-      addLand(37.5, 125.5, 39.5, 127.0, 10, 0x354a2c); // 내륙 고지
-      // Japan Honshu
-      addLand(33.0, 130.0, 40.0, 142.0, 6, 0x2a3f22);
-      addLand(35.0, 136.0, 38.0, 141.0, 12, 0x354a2c); // 중앙 산지
-      // Hokkaido
-      addLand(41.5, 140.0, 45.5, 145.5, 6, 0x2a3f22);
-      addLand(42.5, 142.0, 44.5, 144.5, 10, 0x3a5030);
-      // Russian Primorsky
-      addLand(42.0, 130.0, 55.0, 145.0, 5, 0x2a3822);
-      addLand(45.0, 132.0, 53.0, 142.0, 9, 0x334528);
-      // Russian Chukchi / East Siberia
-      addLand(60.0, 160.0, 72.0, 180.0, 5, 0x3a4535);
-      addLand(63.0, 165.0, 70.0, 178.0, 8, 0x454f40);
-      addLand(60.0, -180.0, 70.0, -160.0, 5, 0x3a4535);
-      // Kamchatka
-      addLand(51.0, 156.0, 60.0, 163.0, 8, 0x3a4530);
-      addLand(53.0, 157.5, 58.0, 161.0, 14, 0x4a5540); // 화산 산맥
-      // Alaska
-      addLand(60.0, -168.0, 71.0, -141.0, 6, 0x3f4a38);
-      addLand(62.0, -155.0, 68.0, -148.0, 12, 0x4a5540); // 내륙
-      // Greenland
-      addLand(60.0, -50.0, 83.0, -18.0, 8, 0x6a7a78);
-      addLand(64.0, -46.0, 80.0, -25.0, 15, 0x8a9a95); // 빙상 고원
-      // Norway / Scandinavia
-      addLand(57.0, 5.0, 71.0, 30.0, 6, 0x2a3f22);
-      addLand(60.0, 7.0, 69.0, 18.0, 12, 0x3a4a30); // 피오르드 산맥
-      // Svalbard
-      addLand(76.5, 14.0, 80.5, 28.0, 6, 0x6a7a72);
-      addLand(77.5, 16.0, 79.5, 24.0, 10, 0x8a9a8a);
-      // United Kingdom
-      addLand(50.0, -6.0, 59.0, 2.0, 5, 0x2a3f22);
-      // Netherlands / German coast
-      addLand(51.0, 3.0, 54.0, 10.0, 3, 0x354a2c);
-      // Iceland
-      addLand(63.5, -24.0, 66.5, -13.0, 6, 0x4a5a4a);
-      addLand(64.0, -21.0, 66.0, -16.0, 11, 0x5a6a5a); // 중앙 고지
-      // Northern Canada
-      addLand(70.0, -100.0, 78.0, -60.0, 5, 0x3f4a3a);
-      addLand(72.0, -90.0, 76.0, -70.0, 10, 0x4a5545);
-      // Novaya Zemlya
-      addLand(70.5, 50.0, 77.0, 60.0, 6, 0x5a6a60);
-      // Franz Josef Land
-      addLand(79.5, 44.0, 81.5, 62.0, 5, 0x7a8a80);
-      // Severnaya Zemlya
-      addLand(78.0, 90.0, 81.5, 107.0, 5, 0x6a7a70);
-      // New Siberian Islands
-      addLand(73.0, 135.0, 76.0, 150.0, 4, 0x5a6a55);
-      // Wrangel Island (아라온 정박지)
-      addLand(70.5, 178.5, 71.5, -178.0, 4, 0x5a6a55);
-
+      landGroup.add(new THREE.Mesh(geo, mat));
       scene.add(landGroup);
       ctx.current.landGroup = landGroup;
     },
@@ -1692,6 +1792,35 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
   //      → trace 무시, 본선 heading 기준 앞/옆 offset으로 강제 배치
   // setAraonState: 모드·config 만 갱신. 실제 위치 이동은 렌더 루프가 매 프레임 lerp.
   // 모드가 바뀌면 전환 애니메이션 시작 (현재 아라온 위치 → 새 타겟으로 easeInOut)
+  // 항로별 호위 자산 전환 — FOLLOW 모드 3D 쇄빙선 모델을 자산 특성으로 재구성.
+  // (아라온/CCGS/원자력 쇄빙선이 색상·형태가 다르므로 mesh 자체를 교체)
+  const setEscortAsset = useCallback((asset) => {
+    const visual = asset?.visual || ESCORT_DEFAULT_VISUAL;
+    const c = ctx.current;
+    c.escortVisual = visual; // init 전이면 저장만 (init 이 이 값으로 빌드)
+    if (!c.scene || !c.matScale) return;
+    // 동일 자산이면 재구성 불필요
+    if (c.escortAssetId === (asset?.id || 'araon') && c.araonGroup) return;
+    c.escortAssetId = asset?.id || 'araon';
+
+    const wasVisible = c.araonGroup ? c.araonGroup.visible : false;
+    const prevPos = c.araonGroup ? c.araonGroup.position.clone() : null;
+    // 기존 모델 제거 + dispose
+    if (c.araonGroup) {
+      c.scene.remove(c.araonGroup);
+      c.araonGroup.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+    }
+    const { group, mesh } = buildIcebreakerMesh(c.matScale, trackDisposable, visual);
+    group.visible = wasVisible;
+    if (prevPos) group.position.copy(prevPos);
+    c.scene.add(group);
+    c.araonGroup = group;
+    c.araonMesh = mesh;
+  }, [trackDisposable]);
+
   const setAraonState = useCallback((input) => {
     const c = ctx.current;
     const group = c.araonGroup;
@@ -2021,6 +2150,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       setRealWaveInput,
       setWeatherVisuals,
       setAraonState,
+      setEscortAsset,
       updateNightMode,
       syncThreeIcebergs,
       checkAutoCollisions,
@@ -2041,6 +2171,7 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       setRealWaveInput,
       setWeatherVisuals,
       setAraonState,
+      setEscortAsset,
       updateNightMode,
       syncThreeIcebergs,
       checkAutoCollisions,
@@ -2254,8 +2385,29 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       for (const berg of ctx.current.realBergs) {
         if (berg.grp) berg.grp.visible = showIce;
       }
+
+      // 선박 주변 해안선(육지) 갱신:
+      //   · 마스크 로드 완료 후 첫 실데이터 빌드(needFirstReal)
+      //   · 또는 마지막 빌드 중심에서 LAND_REBUILD_DEG 이상 이동 시 재생성
+      // 패치는 buildLandMasses 내부에서 선박 현재 scene 위치 기준으로 재중심화.
+      const lc = ctx.current.landCenter;
+      const maskReady = isGlobalLandMaskReady();
+      let dLon = lon - (lc ? lc.lon : lon);
+      if (dLon > 180) dLon -= 360;
+      if (dLon < -180) dLon += 360;
+      const cosLat = Math.cos((lat * Math.PI) / 180);
+      const movedFar =
+        !lc ||
+        Math.abs(lc.lat - lat) > LAND_REBUILD_DEG ||
+        Math.abs(dLon) * cosLat > LAND_REBUILD_DEG;
+      const needFirstReal = maskReady && !ctx.current.landBuiltReady;
+      if (movedFar || needFirstReal) {
+        buildLandMasses(lat, lon);
+        ctx.current.landCenter = { lat, lon };
+        if (maskReady) ctx.current.landBuiltReady = true;
+      }
     }
-  }, [shipState, mode]);
+  }, [shipState, mode, manualMode, buildLandMasses]);
 
   // ── FOLLOW 줌 상태 (스크롤) ──────────────────────────────────────────────
   const followZoomTargetRef = useRef(600);
