@@ -174,6 +174,7 @@ export default function useAraonControl({
     let last = performance.now();
     let frame = 0;
     let lastMode = ref.current.mode;
+    let lastAssetId = null; // 자산(항로) 전환 감지 — idle 이어도 모항 갱신 강제용
 
     function loop(now) {
       raf = requestAnimationFrame(loop);
@@ -189,6 +190,15 @@ export default function useAraonControl({
       const timed = route.timed;
       if (!wps || wps.length < 2) return;
       const { totalKm, homeProg } = routeInfo(wps, timed, home, asset.reachKm);
+
+      // 항로(자산) 전환 감지 — idle 이어도 새 자산 모항으로 즉시 스냅 + 상태 갱신
+      const assetChanged = asset.id !== lastAssetId;
+      lastAssetId = asset.id;
+      if (assetChanged && s.mode === 'idle') {
+        s.lat = home.lat;
+        s.lon = home.lon;
+        s.heading = 0;
+      }
 
       const mult = Math.max(1, (getMultiplier && getMultiplier()) || 1000);
       const stepKm = (asset.speedKn || 16) * KN_TO_KMH * ((dt * mult) / 3600);
@@ -258,7 +268,7 @@ export default function useAraonControl({
       frame += 1;
       const modeChanged = s.mode !== lastMode;
       lastMode = s.mode;
-      const idleQuiet = s.mode === 'idle' && !modeChanged;
+      const idleQuiet = s.mode === 'idle' && !modeChanged && !assetChanged;
       if (!idleQuiet && (frame % 10 === 0 || modeChanged)) {
         setAraon({
           lat: s.lat,
