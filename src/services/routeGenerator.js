@@ -311,7 +311,22 @@ async function optimizeArcticSegment(waypoints, iceData, icebergs, maxSafeConcen
 
   const before = waypoints.slice(0, entryIdx);
   const after  = waypoints.slice(exitIdx + 1);
-  return [...before, ...arcticWaypoints, ...after];
+  const candidate = [...before, ...arcticWaypoints, ...after];
+
+  // 검증: 거친 0.5° A* 재라우팅이 0.05° 정밀 마스크 기준 육지를 지나면(베링·캐나다
+  // 제도 등에서 흔함) 정밀하게 검증된 기본 항로를 그대로 유지한다. 마스크 미로드 시에도
+  // 안전하게 기본 항로 유지. (A* 는 개방 북극해에서 해빙 회피가 깨끗할 때만 채택됨)
+  if (!isGlobalLandMaskReady()) {
+    try { await initGlobalLandMask(); } catch (_) { /* 마스크 없으면 기본 유지 */ }
+  }
+  if (!isGlobalLandMaskReady()) return waypoints;
+  for (let i = 1; i < candidate.length; i++) {
+    if (segmentCrossesLand(candidate[i - 1], candidate[i])) {
+      console.warn('[routeGenerator] 북극 A* 재라우팅이 육지 통과 — 기본(정밀) 항로 유지');
+      return waypoints;
+    }
+  }
+  return candidate;
 }
 
 /**

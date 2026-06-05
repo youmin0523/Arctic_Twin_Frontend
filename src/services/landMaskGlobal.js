@@ -157,6 +157,11 @@ export function findWaterDetour(from, to, opts = {}) {
   const minRelC = Math.min(sc, relGC) - marginCells;
   const maxRelC = Math.max(sc, relGC) + marginCells;
 
+  // 탐색 윈도우 상한 — from/to 가 수십° 떨어진 대형 구간에서 격자 탐색공간이
+  // 폭발해 OOM/탭 멈춤이 발생하는 것을 막는다(초과 시 우회 불가로 간주, null 반환).
+  const maxWindowCells = opts.maxWindowCells ?? 1_500_000;
+  if ((maxR - minR + 1) * (maxRelC - minRelC + 1) > maxWindowCells) return null;
+
   const key = (c, r) => r * META.cols + ((c % META.cols) + META.cols) % META.cols;
   const g = new Map(), came = new Map(), open = new Map();
   const relCol = new Map(); // key -> 상대 열(연속 좌표)
