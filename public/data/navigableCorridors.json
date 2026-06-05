@@ -1,0 +1,35 @@
+{
+  "_comment": "통항 가능 해협/운하 화이트리스트. 0.05° 해안선 마스크가 폭이 좁아 '육지'로 닫지만 실제로는 통항 가능한 구간. 육지회피(정적 후처리 avoidLandGlobal·런타임 landAheadGlobal) 판정에서 이 영역의 육지 표본은 면제한다. boxes=사각 영역, lanes=축선 폴리라인 + bufferKm 버퍼([lon,lat] 순).",
+  "boxes": [
+    { "name": "Gibraltar Strait", "latMin": 35.8, "latMax": 36.2, "lonMin": -5.85, "lonMax": -5.2 },
+    { "name": "Dover/English Channel E", "latMin": 50.6, "latMax": 51.4, "lonMin": -0.6, "lonMax": 2.2 },
+    { "name": "Singapore Strait", "latMin": 1.0, "latMax": 1.5, "lonMin": 103.2, "lonMax": 104.5 },
+    { "name": "Busan Port Approach", "latMin": 34.95, "latMax": 35.25, "lonMin": 128.85, "lonMax": 129.15 },
+    { "name": "Rotterdam Port Approach", "latMin": 51.82, "latMax": 52.05, "lonMin": 3.9, "lonMax": 4.6 }
+  ],
+  "lanes": [
+    {
+      "name": "Suez (Gulf of Suez + Canal)",
+      "bufferKm": 13,
+      "points": [
+        [34.55, 27.60], [34.00, 28.05], [33.40, 28.45], [32.95, 28.95],
+        [32.70, 29.40], [32.55, 29.93], [32.45, 30.42], [32.32, 30.80],
+        [32.30, 31.25], [32.40, 31.90]
+      ]
+    },
+    {
+      "name": "Sunda Strait",
+      "bufferKm": 12,
+      "points": [
+        [106.25, -5.60], [105.30, -5.95], [104.90, -6.15], [104.40, -6.55]
+      ]
+    },
+    {
+      "name": "Bab-el-Mandeb",
+      "bufferKm": 12,
+      "points": [
+        [43.40, 12.60], [43.00, 13.05]
+      ]
+    }
+  ]
+}
