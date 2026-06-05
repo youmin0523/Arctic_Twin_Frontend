@@ -136,6 +136,7 @@ export const ROUTES = {
     { lon: -124.825, lat: 74.275, label: '우회' },
     { lon: -124.825, lat: 74.375, label: '우회' },
     { lon: -122.625, lat: 74.525, label: '우회' },
+    { lon: -121.975, lat: 74.575, label: '우회' },
     { lon: -121.275, lat: 74.575, label: '우회' },
     { lon: -121.275, lat: 74.575, label: '우회' },
     { lon: -121.275, lat: 74.575, label: '우회' },
@@ -168,6 +169,7 @@ export const ROUTES = {
     { lon: -87, lat: 74, label: '랭커스터 해협 서부' },
     { lon: -84, lat: 74, label: '랭커스터 해협 중앙' },
     { lon: -81.425, lat: 73.725, label: '우회' },
+    { lon: -81.175, lat: 73.625, label: '우회' },
     { lon: -81.075, lat: 73.475, label: '우회' },
     { lon: -81.075, lat: 73.475, label: '우회' },
     { lon: -81.075, lat: 73.475, label: '우회' },
@@ -416,7 +418,7 @@ export const ROUTES = {
 // [startIdx] 소야해협/말라카해협 → [endIdx] 북해입구/영국해협
 export const ROUTE_CORRIDOR = {
   NSR:  { startIdx: 6,  endIdx: 68 }, // 동해 중앙 → 노스케이프 북방 외해 (육지회피 보정 후 재매핑)
-  NWP:  { startIdx: 3,  endIdx: 100 }, // 부산 남방 외해 → 배핀 만 서부 (육지회피 보정 후 재매핑)
+  NWP:  { startIdx: 3,  endIdx: 102 }, // 부산 남방 외해 → 배핀 만 서부 (육지회피 보정 후 재매핑)
   TSR:  { startIdx: 2,  endIdx: 40 }, // 오륙도 남방 외해 → 북극해 중앙부 (육지회피 보정 후 재매핑)
   SUEZ: { startIdx: 8,  endIdx: 65 }, // 남중국해 북부 → 영국 해협 서측
   CAPE: { startIdx: 8,  endIdx: 49 }, // 남중국해 북부 → 영국 해협 서측
