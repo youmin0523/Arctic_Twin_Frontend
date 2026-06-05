@@ -2244,6 +2244,12 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
           fovImpactBoost: c.fovImpactBoost,
           nightFactor: c.nightFactor,
           nearestIceDist: c.nearestIceDist,
+          // //* [Modified Code] 3D 선박이 실제로 바라보는 방위(deg). FOLLOW 카메라는 이 축
+          //   기준 정후방에 정렬되므로, 컴퍼스 바늘(BridgeOverlay)도 같은 값을 써야
+          //   "바늘 = 선미축"이 일치한다. ry = -heading·π/180 → heading = -ry·180/π.
+          shipHeadingDeg: c.shipGroup3
+            ? ((((-c.shipGroup3.rotation.y * 180) / Math.PI) % 360) + 360) % 360
+            : null,
         };
       },
       updateShipPosition,
@@ -2930,10 +2936,23 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
             MathMax(SHIP_BASE_Y + followHeightOffset * 0.5, camY),
             camZ,
           );
+          // //* [Modified Code] 정조준점을 선체 중앙(원점)이 아니라 "선미 거주구"로 이동.
+          //   원점을 보면 선미의 가로 화면 위치 = sternWorld·sin(orbit.yaw) 만큼 옆으로 빠져
+          //   컴퍼스 바늘(화면 중앙)과 선미가 어긋난다. 선미 지점(선박 축 +Z)을 직접 조준하면
+          //   yaw/heading 오차와 무관하게 선미가 항상 바늘 바로 아래 정렬된다.
+          //   선미 거주구 중심(로컬 z) × shipMesh3 scale(2.8) = 월드 오프셋:
+          //     bulk z≈85→238, lng z≈130→364, container z≈50→140.
+          //   타깃이 카메라보다 항상 앞에 오도록 dist 비율로 클램프.
+          let sternWorld = 238; // bulk
+          if (specs?.type === 'lng') sternWorld = 364;
+          else if (specs?.type === 'container') sternWorld = 140;
+          const sternAim = Math.min(sternWorld, dist * 0.6);
+          const aimX = shipPos.x + Math.sin(ry) * sternAim;
+          const aimZ = shipPos.z + Math.cos(ry) * sternAim;
           camera.lookAt(
-            shipPos.x,
+            aimX,
             shipPos.y + SHIP_BASE_Y * 1.4 + lookAtYOffset,
-            shipPos.z,
+            aimZ,
           );
 
           const pitchLerp = Math.min(1, dist / 1500);
