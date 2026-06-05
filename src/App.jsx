@@ -755,6 +755,16 @@ function AppInner() {
     );
   }, [state.currentRouteKey, state.generatedWaypoints, state.editedRoutes]);
 
+  // 지구본에 그릴 항로선 — Voyage 모드에선 재생 trace에 동봉된 정합 경로
+  // (route_waypoints, 육지 회피·표시용 단순화본)를 그려 화면 항로선과 본선
+  // 재생 경로를 일치시킨다. Live 모드는 동적 생성 경로(activeWaypoints)를 사용.
+  const routeDisplayWaypoints = useMemo(() => {
+    if (voyageActive && voyage.trace?.route_waypoints?.length) {
+      return voyage.trace.route_waypoints;
+    }
+    return activeWaypoints;
+  }, [voyageActive, voyage.trace, activeWaypoints]);
+
   // Ship Design Info "목표 항로"의 웨이포인트 — 적합성 평가(빙하 샘플링·거리) 전용.
   // 활성 항로와 분리. ETC 는 ROUTES 데이터가 없어 출발항→도착항 직선을 사용.
   const designWaypoints = useMemo(() => {
@@ -1377,10 +1387,27 @@ function AppInner() {
 
   // Open-Meteo 실시간 기상 데이터 (파고·기온·가시거리)
   const [weatherData, setWeatherData] = useState(null);
+  const [weatherError, setWeatherError] = useState(false);
   useEffect(() => {
-    fetchWeather()
-      .then(setWeatherData)
-      .catch(() => {}); // 데이터 없으면 수동 입력 fallback
+    let alive = true;
+    const load = () =>
+      fetchWeather()
+        .then((d) => {
+          if (!alive) return;
+          if (d && (d.routes || d.waypoints)) {
+            setWeatherData(d);
+            setWeatherError(false);
+          } else {
+            setWeatherError(true); // 200이지만 빈 payload
+          }
+        })
+        .catch(() => {
+          if (alive) setWeatherError(true); // 실패 시 수동 입력 fallback + 표시
+        });
+    load();
+    // 백엔드 기상 갱신 주기(6시간)보다 짧게 폴링 — 긴 세션에서도 최신값 유지
+    const id = setInterval(load, 30 * 60 * 1000); // 30분
+    return () => { alive = false; clearInterval(id); };
   }, []);
 
   // ── Real wave 주입 ─────────────────────────────────────────────────
@@ -1394,6 +1421,10 @@ function AppInner() {
     const clearWeather = () => {
       three.setRealWaveInput(null);
       if (three.setWeatherVisuals) three.setWeatherVisuals(null);
+      // 실측 바람 없음 → hud 바람 필드 클리어(BottomPanel은 추정값으로 폴백)
+      dispatch({ type: 'UPDATE_HUD', payload: {
+        windSpeedMs: null, windDirDeg: null, windGustMs: null,
+      } });
     };
     if (!weatherData) {
       clearWeather();
@@ -1438,6 +1469,12 @@ function AppInner() {
         Hs: wave.height,
       });
     }
+    // 실측 바람을 hud에 주입 → BottomPanel 풍속/풍향이 실측값으로 표시됨
+    dispatch({ type: 'UPDATE_HUD', payload: {
+      windSpeedMs: wave.windSpeedMs,
+      windDirDeg: wave.windDirectionDeg,
+      windGustMs: wave.windGustMs,
+    } });
   }, [
     weatherData,
     voyageActive,
@@ -1982,7 +2019,8 @@ function AppInner() {
                   lon: b.lon,
                   lat: b.lat,
                   source: b.source || 'sentinel1_sar',
-                  period: b.detection_time || '',
+                  // SAR berg 레코드의 날짜 필드는 last_update (detection_time은 응답 메타에만 존재)
+                  period: b.last_update || b.detection_time || '',
                   length_m: b.length_m || 5000,
                   width_m: b.width_m || 2000,
                   confidence: b.confidence,
@@ -2998,7 +3036,7 @@ function AppInner() {
             ref={cesiumRef}
             currentRouteKey={state.currentRouteKey}
             onViewerReady={handleViewerReady}
-            activeWaypoints={activeWaypoints}
+            activeWaypoints={routeDisplayWaypoints}
             routeVisibility={routeVisibility}
             generatedRoutes={generatedRoutes}
             rlShips={rlShips}
@@ -3468,6 +3506,7 @@ function AppInner() {
                   : mouseGlobePos || state.shipState
               }
               weatherData={weatherData}
+              weatherError={weatherError}
               currentRouteKey={state.currentRouteKey}
               isMouseMode={
                 !state.isSimulating && state.simProgress === 0 && !!mouseGlobePos
@@ -3495,6 +3534,7 @@ function AppInner() {
       {/* ═══ Bottom Panel ═══ */}
       <BottomPanel
         hud={state.hud}
+        shipHeading={state.shipState.heading}
         specs={state.shipSpecs}
         onSpecChange={handleSpecChange}
         onPresetLoad={handlePresetLoad}
