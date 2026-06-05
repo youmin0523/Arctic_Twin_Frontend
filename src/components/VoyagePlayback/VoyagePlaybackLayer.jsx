@@ -15,6 +15,8 @@ import {
   ICEBREAKER_META,
 } from '../../services/voyageTrace';
 import { shipBillboardSize, shipScaleByDistance } from '../../services/shipScale';
+import { makeIcebreakerCanvas } from './AraonLiveMarker';
+import { ESCORT_ASSET_BY_IB_ID } from '../../hooks/useAraonControl';
 
 // RIO 색상 스케일 (본선 tint)
 function rioColor(rio) {
@@ -52,87 +54,8 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
   return ((θ * 180) / Math.PI + 360) % 360;
 }
 
-// billboard 용 canvas — 빨간 선체 + 흰색 브리지 + 주황 악센트 icebreaker
-// (CCGS Louis S. St-Laurent / Vaygach 스타일). 64x96.
-// 위에서 내려다본 top-down view, 뱃머리가 위쪽(canvas y=0).
-function makeIbCanvas() {
-  const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 96;
-  const ctx = c.getContext('2d');
-
-  // 빨간 선체 — 쇄빙선 특유의 길쭉한 선형
-  ctx.fillStyle = '#c0392b';
-  ctx.beginPath();
-  ctx.moveTo(32, 4);          // bow tip
-  ctx.lineTo(48, 16);         // bow shoulder right
-  ctx.lineTo(50, 78);         // stern shoulder right
-  ctx.lineTo(46, 90);         // stern right
-  ctx.lineTo(18, 90);         // stern left
-  ctx.lineTo(14, 78);         // stern shoulder left
-  ctx.lineTo(16, 16);         // bow shoulder left
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // 뱃머리 흰 물 보강선 (reinforced bow line)
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(20, 22);
-  ctx.lineTo(32, 10);
-  ctx.lineTo(44, 22);
-  ctx.stroke();
-
-  // 전방 갑판(흰색) — 헬리패드 구역
-  ctx.fillStyle = '#ecf0f1';
-  ctx.beginPath();
-  ctx.ellipse(32, 30, 10, 8, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#2c3e50';
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-  // H 마크
-  ctx.fillStyle = '#2c3e50';
-  ctx.font = 'bold 9px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('H', 32, 31);
-
-  // 흰색 상부구조 (superstructure / bridge block)
-  ctx.fillStyle = '#ecf0f1';
-  ctx.fillRect(20, 42, 24, 26);
-  ctx.strokeStyle = '#2c3e50';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(20, 42, 24, 26);
-
-  // 브리지 창문 띠 (파랑)
-  ctx.fillStyle = '#2980b9';
-  ctx.fillRect(22, 45, 20, 3);
-
-  // 주황색 악센트 — 구명정/funnel 베이스
-  ctx.fillStyle = '#e67e22';
-  ctx.fillRect(22, 52, 8, 4);
-  ctx.fillRect(34, 52, 8, 4);
-
-  // funnel (중앙)
-  ctx.fillStyle = '#ecf0f1';
-  ctx.fillRect(28, 58, 8, 8);
-  ctx.strokeStyle = '#2c3e50';
-  ctx.strokeRect(28, 58, 8, 8);
-  // funnel top 빨강 줄
-  ctx.fillStyle = '#c0392b';
-  ctx.fillRect(28, 58, 8, 2);
-
-  // 후방 갑판 크레인/윈치
-  ctx.fillStyle = '#f39c12';
-  ctx.fillRect(29, 72, 6, 12);
-
-  return c;
-}
-
+// 쇄빙선 아이콘은 AraonLiveMarker.makeIcebreakerCanvas(visual) 재사용 —
+// 항로별 자산 시각특성(아라온/CCGS/원자력)을 동일 규칙으로 그린다.
 // (본선 캔버스 함수 삭제 — 기존 CesiumGlobe.updateShipEntity 재사용)
 
 export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }) {
@@ -154,8 +77,8 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
       return undefined;
     }
 
-    // canvas 캐싱 (아라온만)
-    ibCanvasRef.current = makeIbCanvas();
+    // 항로별 쇄빙선 아이콘 캐시 (id → canvas). NSR=아라온/NWP=CCGS/TSR=원자력.
+    ibCanvasRef.current = {};
 
     // 본선은 별도 entity 안 만듦 — 기존 CesiumGlobe 의 updateShipEntity 가
     // 그린 본선 (ship-vessel) 을 재활용해서 voyage tHours 위치로 옮긴다.
@@ -168,9 +91,14 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
       );
     }
 
-    // 쇄빙선 (아라온 1척)
+    // 쇄빙선 (항로별 호위 자산 1척)
     for (const ib of firstTick.icebreakers) {
       const meta = ICEBREAKER_META[ib.id] || { name_ko: ib.id };
+      // 항로별 자산 시각특성으로 아이콘 생성 (id 캐시). 미매핑 id 는 기본(아라온).
+      const asset = ESCORT_ASSET_BY_IB_ID[ib.id];
+      if (!ibCanvasRef.current[ib.id]) {
+        ibCanvasRef.current[ib.id] = makeIcebreakerCanvas(asset?.visual);
+      }
       const e = viewer.entities.add({
         id: `voyage-${ib.id}`,
         position: Cesium.Cartesian3.fromDegrees(
@@ -179,7 +107,7 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
           2000, // //* 반대 반구 비침 방지를 위해 해수면 위로 부양
         ),
         billboard: {
-          image: ibCanvasRef.current,
+          image: ibCanvasRef.current[ib.id],
           // //* [Modified Code] 아라온 실제 LOA 110m 비례 (shipScale.js).
           //   종전 80x160(본선보다 크게)은 실제 비율과 반대였고 줌 아웃 시 과대.
           ...shipBillboardSize(undefined, 'icebreaker'),
@@ -318,11 +246,11 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
     const bucket = Math.floor(tHours / 5);
     if (bucket !== lastTickLogRef.current && ship && ibs.length > 0) {
       lastTickLogRef.current = bucket;
-      const araon = ibs.find((x) => x.id === 'ib-araon');
+      const araon = ibs[0];
       if (araon) {
         // eslint-disable-next-line no-console
         console.log(
-          `[Tick] t=${tHours.toFixed(0)}h, ship=(${ship.position.lat.toFixed(2)}N, ${ship.position.lon.toFixed(2)}E), Araon=(${araon.position.lat.toFixed(2)}N, ${araon.position.lon.toFixed(2)}E) ${araon.status}`,
+          `[Tick] t=${tHours.toFixed(0)}h, ship=(${ship.position.lat.toFixed(2)}N, ${ship.position.lon.toFixed(2)}E), IB ${araon.id}=(${araon.position.lat.toFixed(2)}N, ${araon.position.lon.toFixed(2)}E) ${araon.status}`,
         );
       }
     }

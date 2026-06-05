@@ -14,10 +14,17 @@
  *   }
  */
 
-export async function loadTrace(iceClass, month = 3) {
+// Voyage trace 가 존재하는 북극 항로. 그 외(SUEZ/CAPE/ETC)는 NSR 로 폴백.
+export const VOYAGE_ROUTES = ['NSR', 'NWP', 'TSR'];
+export function voyageRouteKey(routeKey) {
+  return VOYAGE_ROUTES.includes(routeKey) ? routeKey : 'NSR';
+}
+
+export async function loadTrace(route, iceClass, month = 3) {
+  const rk = voyageRouteKey(route).toLowerCase();
   const cls = iceClass.toLowerCase();
   const mm = String(month).padStart(2, '0');
-  const url = `/simulations/nsr_month${mm}_${cls}.json`;
+  const url = `/simulations/${rk}_month${mm}_${cls}.json`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`[VoyageTrace] fetch failed: ${url} (${res.status})`);
@@ -138,9 +145,11 @@ export function eventsBetween(trace, prevT, currT) {
 
 /**
  * 쇄빙선 id → name_ko 매핑.
- * 한국 유일의 쇄빙선 '아라온(Araon)' 1척만 운용.
- * 백엔드 INITIAL_ICEBREAKERS 와 동기화 유지 필수.
+ * 항로별 호위 자산 (백엔드 FLEET_BY_ROUTE 와 동기화 유지 필수):
+ *   NSR → 아라온(ib-araon) / NWP → CCGS(ib-ccgs) / TSR → 원자력(ib-rosatom)
  */
 export const ICEBREAKER_META = {
   'ib-araon': { name_ko: '아라온', home_port: 'Wrangel Is. (사전배치)' },
+  'ib-ccgs': { name_ko: 'CCGS 쇄빙선', home_port: 'Resolute Passage (사전배치)' },
+  'ib-rosatom': { name_ko: '원자력 쇄빙선', home_port: 'Longyearbyen (사전배치)' },
 };

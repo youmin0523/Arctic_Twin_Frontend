@@ -175,12 +175,15 @@ export default function VoyageInfoPanel({
   if (!snapshot) return null;
   const isVoyage = snapshot.source === 'voyage';
 
-  // ── 아라온 ───────────────────────────────────────────────────
-  const voyAraon = voyIbs.find((x) => x.id === 'ib-araon');
-  // Live 모드: 현재 항로의 호위 자산명(escortAsset) 우선, 없으면 Voyage 메타(아라온)
-  const araonMeta = escortAsset
-    ? { name_ko: `${escortAsset.flag || ''} ${escortAsset.name}`.trim(), org: escortAsset.org }
-    : ICEBREAKER_META['ib-araon'] || { name_ko: '아라온' };
+  // ── 호위 쇄빙선 (항로별: NSR=아라온/NWP=CCGS/TSR=원자력) ──────────
+  // trace 당 호위 쇄빙선 1척 — 첫 요소가 그 항로의 쇄빙선
+  const voyAraon = voyIbs[0];
+  // Voyage: trace 쇄빙선 id 기준 메타. Live: 현재 항로의 호위 자산명(escortAsset) 우선.
+  const araonMeta = isVoyage
+    ? ICEBREAKER_META[voyAraon?.id] || { name_ko: '쇄빙선' }
+    : escortAsset
+      ? { name_ko: `${escortAsset.flag || ''} ${escortAsset.name}`.trim(), org: escortAsset.org }
+      : ICEBREAKER_META['ib-araon'] || { name_ko: '아라온' };
   let araon;
   if (isVoyage) {
     araon = voyAraon;

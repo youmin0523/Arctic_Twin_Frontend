@@ -92,7 +92,11 @@ import VoyageAutoCam from './components/VoyagePlayback/VoyageAutoCam';
 import ForwardPreviewHUD from './components/hud/ForwardPreviewHUD';
 import FollowMiniMap from './components/hud/FollowMiniMap';
 import VoyageInfoPanel from './components/hud/VoyageInfoPanel';
-import { sampleShipAt, sampleIcebreakersAt } from './services/voyageTrace';
+import {
+  sampleShipAt,
+  sampleIcebreakersAt,
+  voyageRouteKey,
+} from './services/voyageTrace';
 import {
   deriveSpeedKn as deriveVoySpeedKn,
   deriveHeadingDeg as deriveVoyHeadingDeg,
@@ -112,6 +116,11 @@ function archiveKeyToMonth(key) {
   const dated = /^\d{4}-(\d{2})/.exec(key); // "YYYY-MM" 또는 "YYYY-MM-DD"
   return dated ? parseInt(dated[1], 10) : 3;
 }
+
+// 호위(에스코트) 중 본선 감속 계수. 본선 순항(15kn) × 이 값 < 가장 느린 호위 자산
+// (CCGS 15kn)이 되도록 1 미만으로 둬, 동속/저속 쇄빙선도 본선 앞을 선도할 여유를 확보.
+// 실제로도 쇄빙 에스코트 대형의 호송 속도는 개방수역 순항보다 낮다.
+const ESCORT_SHIP_SLOWDOWN = 0.8;
 
 function AppInner() {
   const state = useAppState();
@@ -165,6 +174,17 @@ function AppInner() {
     }
   }, [appMode, state.cachedIceKey, voyage.trace, voyage.month, voyage.setVoyageMonth]);
 
+  // 활성 항로 ↔ Voyage 트레이스 동기화.
+  // voyage 모드에서 항로(currentRouteKey)가 바뀌면 해당 항로의 trace 로 재로드.
+  // 비-북극 항로는 voyageRouteKey 가 NSR 로 폴백 → 동일 trace 면 재로드 생략.
+  useEffect(() => {
+    if (appMode !== 'voyage' || !voyage.trace) return;
+    const rk = voyageRouteKey(state.currentRouteKey);
+    if (rk !== voyage.route) {
+      voyage.setVoyageRoute(rk);
+    }
+  }, [appMode, state.currentRouteKey, voyage.trace, voyage.route, voyage.setVoyageRoute]);
+
   // 아라온 HUD 정보 — voyage 모드면 trace 에서 보간, 아니면 Wrangel 정적값
   const ARAON_STATUS_KO = {
     idle: '대기',
@@ -212,7 +232,8 @@ function AppInner() {
   };
   if (voyageActive && voyage.trace) {
     const ibs = sampleIcebreakersAt(voyage.trace, voyage.tHours);
-    const araon = ibs.find((x) => x.id === 'ib-araon');
+    // trace 당 호위 쇄빙선 1척(항로별 자산) — 첫 요소가 그 항로의 쇄빙선
+    const araon = ibs[0];
     if (araon) {
       araonInfo = {
         ...araonInfo,
@@ -902,6 +923,12 @@ function AppInner() {
     getAsset: useCallback(() => ESCORT_ASSETS[currentRouteKeyRef.current] || null, []),
   });
 
+  // 호위선이 실제 에스코트(escorting) 중인지 — 자동 항해 루프에서 본선 감속 판정용.
+  const escortActiveRef = useRef(false);
+  useEffect(() => {
+    escortActiveRef.current = liveAraon.status === 'escorting';
+  }, [liveAraon.status]);
+
   // ── 항구/경로 변경 시 동적 경로 생성 ──────────────────────────
   useEffect(() => {
     // 기본 부산-로테르담이 아닌 경우에만 동적 경로 생성.
@@ -1022,6 +1049,8 @@ function AppInner() {
         wave_height_m: parseFloat(state.hud.hs) || 1,
       }),
       getIceClass: () => state.shipSpecs?.iceClass || 'PC5',
+      // 활성 항로 → 항로별 RL 회피 모델 선택(NSR/NWP/TSR). 비-북극은 백엔드가 NSR 폴백.
+      getRoute: () => currentRouteKeyRef.current || 'NSR',
       dispatch,
       showToast,
     });
@@ -1046,7 +1075,10 @@ function AppInner() {
       // ── 자동 항해 시뮬레이션 ──────────────────────────────────
       if (isSimulatingRef.current && !manualModeRef.current) {
         const mult = multiplierRef.current;
-        simElapsedRef.current += dt * mult;
+        // 호위(에스코트) 중에는 본선을 감속 → 동속/저속 쇄빙선(예: NWP CCGS 15kn)도
+        // 본선 앞을 선도할 수 있도록 여유 확보(쇄빙선은 자기 속도 그대로 전진).
+        const escortSlow = escortActiveRef.current ? ESCORT_SHIP_SLOWDOWN : 1;
+        simElapsedRef.current += dt * mult * escortSlow;
         const routeKey = currentRouteKeyRef.current;
         // //! [Original Code]
         //        const routeTotalSec = getTotalSeconds(routeKey);
@@ -2506,7 +2538,8 @@ function AppInner() {
       }
     } else {
       // idle 정박 — 활성 항로 자산의 실재 모항 기준(NSR=Wrangel/NWP=Resolute/TSR=Longyearbyen)
-      const homePos = activeEscortAsset?.home || { lat: 71.0, lon: 179.5 };
+      // 폴백 좌표도 연안(71.7)으로 통일 — 레거시 71.0 과 섞이면 위치가 어긋남
+      const homePos = activeEscortAsset?.home || { lat: 71.7, lon: 179.5 };
       const ARAON_LAT = homePos.lat;
       const ARAON_LON = homePos.lon;
       const dLat = ARAON_LAT - ship.lat;
@@ -3057,14 +3090,15 @@ function AppInner() {
     };
   } else if (isArcticRoute && voyageActive && voyage.trace) {
     const ibs = sampleIcebreakersAt(voyage.trace, voyage.tHours);
-    const a = ibs.find((x) => x.id === 'ib-araon');
+    // trace 당 호위 쇄빙선 1척(항로별 자산) — 첫 요소가 그 항로의 쇄빙선
+    const a = ibs[0];
     if (a) {
       // 직전 0.1h 위치를 샘플링해 trace 기반 heading 계산 (본선 heading과 무관)
       const dtH = 0.1;
       const prev = sampleIcebreakersAt(
         voyage.trace,
         Math.max(0, voyage.tHours - dtH),
-      ).find((x) => x.id === 'ib-araon');
+      )[0];
       let aHdg = 0;
       if (
         prev &&
@@ -3224,7 +3258,16 @@ function AppInner() {
           {/* Bridge Overlay */}
           <BridgeOverlay
             visible={state.bridgeVisible}
-            heading={state.shipState.heading}
+            heading={(() => {
+              // //* [Modified Code] FOLLOW(선미 추적)에서는 컴퍼스 바늘을 3D 선박이
+              //   실제로 바라보는 축(ThreeOverlay 실효 heading)에 맞춰, 화면 중앙 바늘과
+              //   선미 정렬이 어긋나지 않게 한다. 모델 미생성/타 모드는 데이터 heading 폴백.
+              const eff =
+                state.currentMode === 'FOLLOW'
+                  ? threeRef.current?.motionState?.shipHeadingDeg
+                  : null;
+              return eff == null ? state.shipState.heading : eff;
+            })()}
             speed={state.hud.speed}
             rollAngle={parseFloat(state.hud.roll) || 0}
             courseBearing={state.hud.courseBearing}
@@ -3263,7 +3306,9 @@ function AppInner() {
           {/* Live Simulation 모드: 아라온이 본선과 함께 움직임 (호위 시 본선 옆, 평시 Wrangel) */}
           <AraonLiveMarker
             cesiumRef={cesiumRef}
-            visible={appMode === 'live' || !!escortOverrideAsset}
+            // voyage 모드에선 VoyagePlaybackLayer(voyage-ib-*)가 쇄빙선을 그리므로
+            // Live 마커는 숨긴다. 둘 다 그리면 쇄빙선이 2척으로 중복 표시됨.
+            visible={!voyageActive && (appMode === 'live' || !!escortOverrideAsset)}
             displayPos={araonDisplayPos}
             asset={activeEscortAsset}
           />
@@ -3500,10 +3545,12 @@ function AppInner() {
                     setVoyageHudVisible(true);
                     if (!voyage.trace) {
                       try {
-                        // 현재 선택된 빙하 아카이브 월에 맞춰 진입 (기본 Arc4)
+                        // 현재 선택된 빙하 아카이브 월 + 활성 항로에 맞춰 진입 (기본 Arc4).
+                        // 비-북극 항로(SUEZ/CAPE/ETC)는 loadTrace 가 NSR 로 폴백.
                         await voyage.loadTraceFor(
                           'Arc4',
                           archiveKeyToMonth(state.cachedIceKey),
+                          state.currentRouteKey,
                         );
                       } catch (e) {
                         // 로드 실패는 콘솔에 이미 로깅됨

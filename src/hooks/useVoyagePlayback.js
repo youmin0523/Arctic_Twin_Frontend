@@ -14,7 +14,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { loadTrace, eventsBetween } from '../services/voyageTrace';
+import { loadTrace, eventsBetween, voyageRouteKey } from '../services/voyageTrace';
 
 export const PLAYBACK_SPEEDS = [1, 10, 60, 300];
 
@@ -26,6 +26,7 @@ export default function useVoyagePlayback() {
   const [newEvents, setNewEvents] = useState([]);
   const [iceClass, setIceClass] = useState(null);
   const [month, setMonth] = useState(3);
+  const [route, setRoute] = useState('NSR');
 
   // rAF 내부 상태 (리렌더 유발 없음)
   const rafRef = useRef(null);
@@ -38,6 +39,7 @@ export default function useVoyagePlayback() {
   const arrivedLoggedRef = useRef(false);
   const iceClassRef = useRef(null);
   const monthRef = useRef(3);
+  const routeRef = useRef('NSR');
 
   // state → ref 동기화
   useEffect(() => {
@@ -119,17 +121,23 @@ export default function useVoyagePlayback() {
     arrivedLoggedRef.current = false;
   }, []);
 
-  // 내부 코어: 클래스+월 조합으로 trace 로드 후 재생 상태 초기화
+  // 내부 코어: 항로+클래스+월 조합으로 trace 로드 후 재생 상태 초기화.
+  // rk 미지정 시 현재 항로 유지 (월/클래스만 바뀌는 호출 호환).
   const loadTraceFor = useCallback(
-    async (cls, m) => {
+    async (cls, m, rk) => {
+      // 비-북극 항로는 NSR trace 로 정규화 — voyage.route 도 실제 trace 키로 저장해
+      // route-sync 이펙트가 불필요한 재로드를 일으키지 않게 한다.
+      const routeKey = voyageRouteKey(rk || routeRef.current || 'NSR');
       pause();
-      const tr = await loadTrace(cls, m);
+      const tr = await loadTrace(routeKey, cls, m);
       traceRef.current = tr;
       setTrace(tr);
       iceClassRef.current = cls;
       setIceClass(cls);
       monthRef.current = m;
       setMonth(m);
+      routeRef.current = routeKey;
+      setRoute(routeKey);
       tHoursRef.current = 0;
       prevFiredTRef.current = 0;
       setTHours(0);
@@ -139,15 +147,21 @@ export default function useVoyagePlayback() {
     [pause],
   );
 
-  // 클래스만 변경 (현재 월 유지)
+  // 클래스만 변경 (현재 항로·월 유지)
   const loadIceClass = useCallback(
-    (cls) => loadTraceFor(cls, monthRef.current),
+    (cls) => loadTraceFor(cls, monthRef.current, routeRef.current),
     [loadTraceFor],
   );
 
-  // 월만 변경 (현재 클래스 유지, 미선택 시 Arc4 기본)
+  // 월만 변경 (현재 항로·클래스 유지, 미선택 시 Arc4 기본)
   const setVoyageMonth = useCallback(
-    (m) => loadTraceFor(iceClassRef.current || 'Arc4', m),
+    (m) => loadTraceFor(iceClassRef.current || 'Arc4', m, routeRef.current),
+    [loadTraceFor],
+  );
+
+  // 항로만 변경 (현재 클래스·월 유지) — Voyage 중 항로 전환 시 trace 재로드
+  const setVoyageRoute = useCallback(
+    (rk) => loadTraceFor(iceClassRef.current || 'Arc4', monthRef.current, rk),
     [loadTraceFor],
   );
 
@@ -168,6 +182,7 @@ export default function useVoyagePlayback() {
     trace,
     iceClass,
     month,
+    route,
     tHours,
     isPlaying,
     speed,
@@ -175,6 +190,7 @@ export default function useVoyagePlayback() {
     loadIceClass,
     loadTraceFor,
     setVoyageMonth,
+    setVoyageRoute,
     play,
     pause,
     seek,
