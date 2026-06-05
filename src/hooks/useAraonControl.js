@@ -16,15 +16,56 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { routePos, calculateRouteDistanceKM } from '../services/shipSimulator';
 
-export const ARAON_HOME = { lat: 71.0, lon: 179.5 }; // Wrangel Island 북안
+// ── 항로별 쇄빙 호위 자산 (실재 거점에 사전배치) ──────────────────────
+// 각 북극항로는 관할·지리가 달라 호위 자산과 모항이 다르다. 모항은 해당 항로가
+// 실제로 근접 통과하는 실재 위치로 배치(자산은 그 위치에서 대기).
+//   NSR → 아라온(KOPRI), Wrangel섬(러 북극, NSR 북방 ~150km)
+//   NWP → 캐나다 해안경비대, Resolute Bay(캐 북극 군도, 배로우 해협 인근)
+//   TSR → 원자력 쇄빙선(Rosatomflot), Longyearbyen/Svalbard(TSR 대서양측 ~230km)
+export const ESCORT_ASSETS = {
+  NSR: {
+    id: 'araon', name: '아라온', org: 'KOPRI', flag: '🇰🇷',
+    home: { lat: 71.0, lon: 179.5 }, homeName: 'Wrangel섬',
+    speedKn: 16, reachKm: 400,
+    // 시각 특성 — 한국 KOPRI 아라온: 빨간 선체 + 흰 상부 + 주황 A-프레임 크레인 + 헬리데크
+    hullColor: '#c0392b',
+    visual: {
+      hull: 0xc0392b, deck: 0x6b1e17, sup: 0xecf0f1, window: 0x1a365d,
+      accent: 0xe67e22, gray: 0x4a5568, funnelBand: 0xc0392b,
+      helideck: true, crane: true, stripe: null, reactor: false,
+    },
+  },
+  NWP: {
+    id: 'ccgs', name: 'CCGS 쇄빙선', org: '캐나다 해안경비대', flag: '🇨🇦',
+    home: { lat: 74.68, lon: -94.9 }, homeName: 'Resolute Bay',
+    speedKn: 15, reachKm: 400,
+    // 캐나다 해안경비대: 빨간 선체 + 흰 전방 사선 스트라이프 + 흰 상부 + 헬리데크
+    hullColor: '#d81e3f',
+    visual: {
+      hull: 0xd81e3f, deck: 0x7a1020, sup: 0xf5f7fa, window: 0x12263a,
+      accent: 0xe2231a, gray: 0x52606d, funnelBand: 0xffffff,
+      helideck: true, crane: false, stripe: 0xffffff, reactor: false,
+    },
+  },
+  TSR: {
+    id: 'rosatom', name: '원자력 쇄빙선', org: 'Rosatomflot', flag: '🇷🇺',
+    home: { lat: 78.22, lon: 15.65 }, homeName: 'Longyearbyen',
+    speedKn: 18, reachKm: 400,
+    // Rosatomflot 원자력 쇄빙선(Arktika급): 검은 선체 + 노란(아톰플로트) 상부 + 원자로 블록
+    hullColor: '#1c2530',
+    visual: {
+      hull: 0x1c2530, deck: 0x0f141b, sup: 0xf2c14e, window: 0x0b1320,
+      accent: 0xd64545, gray: 0x9aa3ad, funnelBand: 0xd64545,
+      helideck: true, crane: false, stripe: null, reactor: true,
+    },
+  },
+};
 
-const SPEED_KN = 16;
+// 하위호환: 기존 ARAON_HOME 참조는 NSR(아라온) 거점으로 유지
+export const ARAON_HOME = ESCORT_ASSETS.NSR.home; // Wrangel Island 북안
+
 const KN_TO_KMH = 1.852;
 const ESCORT_LEAD_KM = 25; // 에스코트 시 본선 앞 유지 간격
-// B안: 사전배치 거점(Wrangel)이 항로에서 이 거리 안을 지날 때만 호위 유효.
-// NSR 은 Wrangel 북방 ~150km 를 통과하므로 충분. SUEZ/CAPE 나 역방향에서
-// '항로상 Wrangel 최근접 = 부산(끝점)' 으로 스냅되어 도착지에 박히는 현상 방지.
-const WRANGEL_REACH_KM = 400;
 const TRANSIT_THRESHOLD_KM = 150; // 본선과 이 거리 밖이면 '선도', 안이면 '호위'
 const DOCK_EPS = 0.004; // 진행률 기준 모항 근접 판정
 const EARTH_R = 6371;
@@ -52,27 +93,30 @@ function bearingDeg(a, b) {
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-// 항로 캐시 (waypoints 레퍼런스 기준): 총거리 + Wrangel 최근접 진행률 + 근접 유효성
-let _routeCache = { wps: null, totalKm: 1, homeProg: 0.5, homeReachable: false };
-function routeInfo(wps, timed) {
+// 항로 캐시 (waypoints + 모항 레퍼런스 기준): 총거리 + 모항 최근접 진행률 + 근접 유효성
+let _routeCache = { wps: null, home: null, totalKm: 1, homeProg: 0.5, homeReachable: false };
+function routeInfo(wps, timed, home, reachKm) {
+  const H = home || ARAON_HOME;
   if (!wps || wps.length < 2) return { totalKm: 1, homeProg: 0, homeReachable: false };
-  if (_routeCache.wps === wps) return _routeCache;
+  // 모항(home)이 바뀌면(항로별 자산 전환) 캐시 무효화
+  if (_routeCache.wps === wps && _routeCache.home === H) return _routeCache;
   const totalKm = Math.max(1, calculateRouteDistanceKM(wps));
-  // Wrangel 최근접 진행률 탐색 (0~1, 100분할)
+  // 모항 최근접 진행률 탐색 (0~1, 100분할)
   let best = 0;
   let bestD = Infinity;
   for (let i = 0; i <= 100; i++) {
     const t = i / 100;
     const p = routePos(t, timed, wps);
     if (!p) continue;
-    const d = distanceKm(p, ARAON_HOME);
+    const d = distanceKm(p, H);
     if (d < bestD) {
       bestD = d;
       best = t;
     }
   }
-  // B안: 항로가 Wrangel 근방(WRANGEL_REACH_KM)을 실제로 지날 때만 호위 유효
-  _routeCache = { wps, totalKm, homeProg: best, homeReachable: bestD <= WRANGEL_REACH_KM };
+  // 항로가 모항 근방(reachKm)을 실제로 지날 때만 호위 유효
+  // (비북극·역방향 등에서 '항로상 최근접=도착지' 스냅 방지)
+  _routeCache = { wps, home: H, totalKm, homeProg: best, homeReachable: bestD <= (reachKm || 400) };
   return _routeCache;
 }
 
@@ -81,13 +125,19 @@ function routeInfo(wps, timed) {
  * @param {() => ({waypoints:Array, timed:Array})} opts.getRoute  활성 항로
  * @param {() => number} opts.getMultiplier  시뮬 시간 배율
  * @param {() => boolean} opts.getActive  Live 모드 여부
+ * @param {() => (object|null)} opts.getAsset  현재 활성 항로의 호위 자산(ESCORT_ASSETS[route]) 또는 null
  */
 export default function useAraonControl({
   getShipProgress,
   getRoute,
   getMultiplier,
   getActive,
+  getAsset,
 }) {
+  // 현재 활성 항로의 호위 자산 (없으면 NSR 아라온 폴백)
+  const resolveAsset = () =>
+    (getAsset && getAsset()) || ESCORT_ASSETS.NSR;
+
   // mode: 'idle' | 'active' | 'returning'
   const ref = useRef({ progress: 0.5, mode: 'idle', lat: ARAON_HOME.lat, lon: ARAON_HOME.lon, heading: 0 });
   const [araon, setAraon] = useState(() => ({
@@ -96,22 +146,23 @@ export default function useAraonControl({
     heading: 0,
     mode: 'idle',
     status: 'idle',
-    label: '대기 (Wrangel)',
+    label: `대기 (${ESCORT_ASSETS.NSR.homeName})`,
   }));
 
   const callAraon = useCallback(() => {
     const s = ref.current;
+    const asset = resolveAsset();
     if (s.mode === 'idle') {
-      // 항로상 Wrangel 최근접 지점으로 진입
+      // 항로상 자산 모항 최근접 지점으로 진입
       const { waypoints, timed } = getRoute() || {};
-      const info = routeInfo(waypoints, timed);
-      // B안: 항로가 Wrangel 사전배치 거점 근처를 안 지나면(비북극·역방향 등)
-      // 호위가 물리적으로 불가 → 호출 무시(idle 유지). 도착지 부산에 박히는 현상 방지.
+      const info = routeInfo(waypoints, timed, asset.home, asset.reachKm);
+      // 항로가 자산 사전배치 거점 근처를 안 지나면(비북극·역방향 등)
+      // 호위가 물리적으로 불가 → 호출 무시(idle 유지). 도착지 스냅 현상 방지.
       if (!info.homeReachable) return;
       s.progress = info.homeProg;
     }
     s.mode = 'active';
-  }, [getRoute]);
+  }, [getRoute, getAsset]);
 
   const recallAraon = useCallback(() => {
     if (ref.current.mode !== 'idle') ref.current.mode = 'returning';
@@ -131,22 +182,24 @@ export default function useAraonControl({
       if (!getActive || !getActive()) return;
 
       const s = ref.current;
+      const asset = resolveAsset();
+      const home = asset.home;
       const route = getRoute() || {};
       const wps = route.waypoints;
       const timed = route.timed;
       if (!wps || wps.length < 2) return;
-      const { totalKm, homeProg } = routeInfo(wps, timed);
+      const { totalKm, homeProg } = routeInfo(wps, timed, home, asset.reachKm);
 
       const mult = Math.max(1, (getMultiplier && getMultiplier()) || 1000);
-      const stepKm = SPEED_KN * KN_TO_KMH * ((dt * mult) / 3600);
+      const stepKm = (asset.speedKn || 16) * KN_TO_KMH * ((dt * mult) / 3600);
       const stepProg = stepKm / totalKm;
 
       let status = s.mode;
-      let label = '대기 (Wrangel)';
+      let label = `대기 (${asset.homeName})`;
       const shipProg = Math.max(0, Math.min(1, (getShipProgress && getShipProgress()) || 0));
 
       if (s.mode === 'returning') {
-        // 항로를 따라 모항 최근접 진행률로 이동 → 도달 시 Wrangel 정박
+        // 항로를 따라 모항 최근접 진행률로 이동 → 도달 시 모항 정박
         const target = homeProg;
         if (Math.abs(s.progress - target) <= Math.max(stepProg, DOCK_EPS)) {
           s.progress = target;
@@ -155,11 +208,11 @@ export default function useAraonControl({
           s.progress += s.progress < target ? stepProg : -stepProg;
         }
         if (s.mode === 'idle') {
-          s.lat = ARAON_HOME.lat;
-          s.lon = ARAON_HOME.lon;
+          s.lat = home.lat;
+          s.lon = home.lon;
           s.heading = 0;
           status = 'idle';
-          label = '대기 (Wrangel)';
+          label = `대기 (${asset.homeName})`;
         } else {
           const p = routePos(s.progress, timed, wps);
           if (p) {
@@ -195,11 +248,11 @@ export default function useAraonControl({
           label = '호위 중';
         }
       } else {
-        // idle
-        s.lat = ARAON_HOME.lat;
-        s.lon = ARAON_HOME.lon;
+        // idle — 자산 모항에서 대기
+        s.lat = home.lat;
+        s.lon = home.lon;
         status = 'idle';
-        label = '대기 (Wrangel)';
+        label = `대기 (${asset.homeName})`;
       }
 
       frame += 1;
@@ -221,7 +274,7 @@ export default function useAraonControl({
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [getShipProgress, getRoute, getMultiplier, getActive]);
+  }, [getShipProgress, getRoute, getMultiplier, getActive, getAsset]);
 
   return { araon, callAraon, recallAraon, getMode };
 }

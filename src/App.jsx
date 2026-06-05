@@ -3162,6 +3162,7 @@ function AppInner() {
             mode={state.currentMode}
             baseRef={PORTS[state.departurePort] || PORTS.BUSAN}
             manualMode={state.manualMode}
+            escortAsset={activeEscortAsset}
           />
           <DeckOverlay
             ref={deckRef}

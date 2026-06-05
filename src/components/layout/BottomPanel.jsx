@@ -612,12 +612,14 @@ function ServiceInfoPanel({ hud, shipHeading, currentRoute, evaluationResult, sp
 
   const st = evaluationResult?.status || '';
   const isSuitable = st === 'NSR_APPROVED' || st === 'NSR_RESTRICTED';
+  const isNonArctic = st === 'NON_ARCTIC';
   const isPending = !evaluationResult;
-  const visibleRoutes = isPending
-    ? allRoutes
-    : isSuitable
+  const visibleRoutes =
+    isPending || isNonArctic
       ? allRoutes
-      : allRoutes.filter((r) => !r.arctic);
+      : isSuitable
+        ? allRoutes
+        : allRoutes.filter((r) => !r.arctic);
 
   const currentRouteData = allRoutes.find((r) => r.name === currentRoute);
   const suezRoute = allRoutes.find((r) => r.name === 'SUEZ');
@@ -643,12 +645,14 @@ function ServiceInfoPanel({ hud, shipHeading, currentRoute, evaluationResult, sp
     NSR_RESTRICTED: '조건부 운항 허가',
     REROUTE_SUEZ: '북극항로 부적합 — 수에즈 우회',
     REROUTE_CAPE: '북극항로 부적합 — 희망봉 우회',
+    NON_ARCTIC: '비북극 항로 (극지 평가 불필요)',
   };
   const statusColor = {
     NSR_APPROVED: '#27ae60',
     NSR_RESTRICTED: '#f39c12',
     REROUTE_SUEZ: '#e74c3c',
     REROUTE_CAPE: '#e74c3c',
+    NON_ARCTIC: '#38bdf8',
   };
 
   return (
@@ -688,7 +692,7 @@ function ServiceInfoPanel({ hud, shipHeading, currentRoute, evaluationResult, sp
               textOverflow: 'ellipsis',
             }}
           >
-            🚢 아라온 (KOPRI)
+            {(araon && araon.flag) || '🚢'} {(araon && araon.name) || '아라온'} ({(araon && araon.org) || 'KOPRI'})
           </div>
           <div
             style={{

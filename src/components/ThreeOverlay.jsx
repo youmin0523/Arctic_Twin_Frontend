@@ -1821,6 +1821,11 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
     c.araonMesh = mesh;
   }, [trackDisposable]);
 
+  // 활성 호위 자산(escortAsset) 변경 시 3D 모델 재구성 (FOLLOW 모드 반영)
+  useEffect(() => {
+    setEscortAsset(escortAsset);
+  }, [escortAsset?.id, setEscortAsset]);
+
   const setAraonState = useCallback((input) => {
     const c = ctx.current;
     const group = c.araonGroup;
