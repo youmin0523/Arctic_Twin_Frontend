@@ -5,7 +5,7 @@
     { "name": "Dover/English Channel E", "latMin": 50.6, "latMax": 51.4, "lonMin": -0.6, "lonMax": 2.2 },
     { "name": "Singapore Strait", "latMin": 1.0, "latMax": 1.5, "lonMin": 103.2, "lonMax": 104.5 },
     { "name": "Busan Port Approach", "latMin": 34.95, "latMax": 35.25, "lonMin": 128.85, "lonMax": 129.15 },
-    { "name": "Rotterdam Port Approach", "latMin": 51.82, "latMax": 52.05, "lonMin": 3.9, "lonMax": 4.6 }
+    { "name": "Rotterdam Port Approach", "latMin": 51.75, "latMax": 52.05, "lonMin": 3.8, "lonMax": 4.6 }
   ],
   "lanes": [
     {
