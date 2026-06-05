@@ -241,3 +241,86 @@ export function findWaterDetour(from, to, opts = {}) {
   // 시작/끝(from,to) 제외한 경유점만 반환
   return finalPts.slice(1, -1).map((p) => ({ lon: +p.lon.toFixed(3), lat: +p.lat.toFixed(3) }));
 }
+
+// 최소 힙(f 기준) — findIceDetour 전용
+class _IceHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(f, k) { const a = this.a; a.push([f, k]); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p][0] <= a[i][0]) break;[a[p], a[i]] = [a[i], a[p]]; i = p; } }
+  pop() { const a = this.a; const t = a[0]; const l = a.pop(); if (a.length) { a[0] = l; let i = 0; for (;;) { let s = i; const L = 2 * i + 1, R = 2 * i + 2; if (L < a.length && a[L][0] < a[s][0]) s = L; if (R < a.length && a[R][0] < a[s][0]) s = R; if (s === i) break;[a[s], a[i]] = [a[i], a[s]]; i = s; } } return t; }
+}
+
+/**
+ * 빙 인지(POLARIS RIO) 국소 우회 A* — findWaterDetour 의 빙 비용 버전.
+ * 0.05° 격자에서 육지 + 고위험빙(riskFn<hardBlock)을 차단하고, RIO 가 낮을수록
+ * 통항 비용을 가중해 안전한 해빙 통로로 우회한다. 단순화 시 직선화가 육지나
+ * 고위험빙을 지나면 중간점을 유지해 안전을 보장한다.
+ *
+ * @param {{lon,lat}} from
+ * @param {{lon,lat}} to
+ * @param {(lat:number,lon:number)=>number} riskFn  RIO 샘플러(양수=안전, 음수=위험)
+ * @param {Object} opts { marginCells, maxIter, maxWindowCells, hardBlock, penScale }
+ * @returns {Array<{lon,lat}>|null} 경유점(시작/끝 제외), 실패 시 null
+ */
+export function findIceDetour(from, to, riskFn, opts = {}) {
+  if (!packed) return null;
+  const marginCells = opts.marginCells ?? 120;
+  const maxIter = opts.maxIter ?? 1_500_000;
+  const maxWindowCells = opts.maxWindowCells ?? 1_500_000;
+  const hardBlock = opts.hardBlock ?? -10;
+  const penScale = opts.penScale ?? 6;
+  const [sc, sr] = snapToWater(colOf(from.lon), rowOf(from.lat));
+  const [gc, gr] = snapToWater(colOf(to.lon), rowOf(to.lat));
+  const relGC = sc + lonDelta(lonOfCol(sc), lonOfCol(gc)) / META.res;
+  const minR = Math.max(0, Math.min(sr, gr) - marginCells);
+  const maxR = Math.min(META.rows - 1, Math.max(sr, gr) + marginCells);
+  const minRelC = Math.min(sc, relGC) - marginCells;
+  const maxRelC = Math.max(sc, relGC) + marginCells;
+  if ((maxR - minR + 1) * (maxRelC - minRelC + 1) > maxWindowCells) return null;
+  const cellRio = (c, r) => riskFn(latOfRow(r), lonOfCol(c));
+  const blockedCell = (c, r) => cellLand(c, r) || cellRio(c, r) < hardBlock;
+  const icePen = (rio) => (rio >= 0 ? 0 : Math.min(penScale, (-rio) / 10 * penScale));
+  const key = (c, r) => r * META.cols + ((c % META.cols) + META.cols) % META.cols;
+  const g = new Map(), came = new Map(), relCol = new Map(), closed = new Set();
+  const open = new _IceHeap();
+  const startKey = key(sc, sr), goalKey = key(gc, gr);
+  g.set(startKey, 0); relCol.set(startKey, sc); open.push(0, startKey);
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  let iter = 0, found = false;
+  while (open.size && iter++ < maxIter) {
+    const [, cur] = open.pop();
+    if (cur === goalKey) { found = true; break; }
+    if (closed.has(cur)) continue; closed.add(cur);
+    const cr = Math.floor(cur / META.cols), ccCol = cur % META.cols, ccRel = relCol.get(cur), cg = g.get(cur);
+    for (const [dc, dr] of dirs) {
+      const nrAbs = cr + dr; if (nrAbs < minR || nrAbs > maxR) continue;
+      const nRel = ccRel + dc; if (nRel < minRelC || nRel > maxRelC) continue;
+      const nc = ((Math.round(nRel) % META.cols) + META.cols) % META.cols;
+      if (blockedCell(nc, nrAbs)) continue;
+      if (dc && dr) { const o = (((ccCol + dc) % META.cols) + META.cols) % META.cols; if (blockedCell(o, cr) || blockedCell(ccCol, nrAbs)) continue; }
+      const nk = nrAbs * META.cols + nc; const step = (dc && dr) ? 1.4142 : 1;
+      const ng = cg + step * (1 + icePen(cellRio(nc, nrAbs)));
+      if (ng < (g.get(nk) ?? Infinity)) { g.set(nk, ng); came.set(nk, cur); relCol.set(nk, nRel); open.push(ng + Math.hypot(Math.abs(nRel - relGC), nrAbs - gr), nk); }
+    }
+  }
+  if (!found) return null;
+  const cells = []; let k = goalKey, guard = 0; while (k !== undefined && guard++ < 1e5) { cells.push(k); k = came.get(k); } cells.reverse();
+  if (cells.length < 2) return null;
+  const cellPts = cells.map((kk) => ({ lon: lonOfCol(kk % META.cols), lat: latOfRow(Math.floor(kk / META.cols)) }));
+  const pts = [from, ...cellPts, to];
+  // 단순화: 직선화가 육지 또는 고위험빙을 지나면 중간점 유지
+  const segBadLandIce = (a, b) => {
+    const segKm = Math.hypot((b.lat - a.lat) * DEG_TO_KM, lonDelta(a.lon, b.lon) * DEG_TO_KM * Math.cos((a.lat + b.lat) / 2 * Math.PI / 180));
+    const n = Math.max(2, Math.ceil(segKm / 2.5)); const dL = lonDelta(a.lon, b.lon);
+    for (let i = 1; i <= n; i++) {
+      const t = i / n; const lat = a.lat + (b.lat - a.lat) * t; const lon = wrapLon(a.lon + dL * t);
+      if (isLandGlobal(lat, lon) && !inNavigableCorridor(lat, lon)) return true;
+      if (riskFn(lat, lon) < hardBlock) return true;
+    }
+    return false;
+  };
+  const out = [pts[0]]; let anchor = 0;
+  for (let i = 2; i < pts.length; i++) if (segBadLandIce(pts[anchor], pts[i])) { out.push(pts[i - 1]); anchor = i - 1; }
+  out.push(pts[pts.length - 1]);
+  return out.slice(1, -1).map((p) => ({ lon: +p.lon.toFixed(3), lat: +p.lat.toFixed(3) }));
+}

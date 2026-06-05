@@ -17,6 +17,7 @@ import {
   findWaterDetour,
   inNavigableCorridor,
 } from './landMaskGlobal';
+import { applyIceDetours } from './iceDetour';
 
 // ── 전역 육지 회피 후처리 ──────────────────────────────────────────────
 // 연안 접근 구간(인천·상하이 앞 섬/반도, 소야해협 등)을 직선으로 스플라이스하면
@@ -149,6 +150,7 @@ export async function generateRoute(
   iceData = null,
   icebergs = [],
   maxSafeConcentration = 0.7,
+  iceClass = 'PC5',
 ) {
   const raw = await generateRouteRaw(
     depPort,
@@ -157,6 +159,7 @@ export async function generateRoute(
     iceData,
     icebergs,
     maxSafeConcentration,
+    iceClass,
   );
   try {
     return await avoidLandGlobal(raw);
@@ -171,7 +174,8 @@ async function generateRouteRaw(
   routeType,
   iceData = null,
   icebergs = [],
-  maxSafeConcentration = 0.7
+  maxSafeConcentration = 0.7,
+  iceClass = 'PC5'
 ) {
   // 0. ETC(기타) — 출발항↔도착항을 잇는 직선(대권) 경로.
   //    정의된 회랑 데이터가 없으므로 항상 두 항구를 직접 연결한다.
@@ -186,8 +190,8 @@ async function generateRouteRaw(
 
   // 1. 기본 경로 (부산→로테르담) — 검증된 하드코딩 경로 사용
   if (isDefaultRoute(depPort.id, arrPort.id)) {
-    if (icebergs.length > 0 && iceData) {
-      return optimizeArcticSegment(baseRoute, iceData, icebergs, maxSafeConcentration);
+    if (iceData) {
+      return await applyIceDetours(baseRoute, iceData, iceClass);
     }
     return baseRoute;
   }
@@ -195,8 +199,8 @@ async function generateRouteRaw(
   // 2. 정확한 역방향 (로테르담→부산) — 전체 경로 역전
   if (isExactReverse(depPort.id, arrPort.id)) {
     const reversed = reverseRoute(baseRoute);
-    if (icebergs.length > 0 && iceData) {
-      return optimizeArcticSegment(reversed, iceData, icebergs, maxSafeConcentration);
+    if (iceData) {
+      return await applyIceDetours(reversed, iceData, iceClass);
     }
     return reversed;
   }
@@ -267,9 +271,9 @@ async function generateRouteRaw(
     directedRoute, depPort, arrPort, startIdx, endIdx, depApproach, arrApproach
   );
 
-  // 4. 북극 경로 A* 최적화
+  // 4. 북극 경로 POLARIS 해빙 우회 (베이스 항로 국소 우회)
   if (['NSR', 'NWP', 'TSR'].includes(routeType) && iceData) {
-    waypoints = await optimizeArcticSegment(waypoints, iceData, icebergs, maxSafeConcentration);
+    waypoints = await applyIceDetours(waypoints, iceData, iceClass);
   }
 
   return waypoints;
