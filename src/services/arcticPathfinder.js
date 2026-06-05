@@ -375,8 +375,17 @@ export function findArcticPath(
   const openSet = new MinHeap();
   openSet.push(startIdx, heuristic(startCol, startRow, goalCol, goalRow));
 
+  // closed 집합 + 반복상한: 목적지 도달 불가(육지로 둘러싸인 경우 등)나 Float32
+  // gScore 정밀도로 인한 무한 재완화에서 브라우저가 멈추는 것을 막는다.
+  const closed = new Uint8Array(size);
+  let iterations = 0;
+  const MAX_ITERATIONS = size * 4;
+
   while (openSet.size > 0) {
+    if (iterations++ > MAX_ITERATIONS) return null;
     const currentIdx = openSet.pop();
+    if (closed[currentIdx]) continue;
+    closed[currentIdx] = 1;
 
     if (currentIdx === goalIdx) {
       return reconstructPath(cameFrom, currentIdx);
