@@ -144,6 +144,26 @@ export function eventsBetween(trace, prevT, currT) {
 }
 
 /**
+ * 현재 시각이 RL 빙산 회피 윈도우 안인지 판정.
+ * metadata.rl_avoidance.segments(최종 route km 좌표) 기준으로, 현재 본선의
+ * km_along_route 가 어느 회피 구간에 속하는지 본다. 이벤트(rl_avoid_start/end)에
+ * 의존하지 않으므로 seek 로 윈도우 중간에 진입해도 정확히 동작한다.
+ *
+ * @returns {{start_km,end_km,confidence,berg_count}|null} 활성 회피 세그먼트 또는 null
+ */
+export function avoidanceSegmentAt(trace, tHours) {
+  const segs = trace?.metadata?.rl_avoidance?.segments;
+  if (!Array.isArray(segs) || segs.length === 0) return null;
+  const ship = sampleShipAt(trace, tHours);
+  if (!ship) return null;
+  const km = ship.km_along_route || 0;
+  for (const s of segs) {
+    if (km >= s.start_km && km <= s.end_km) return s;
+  }
+  return null;
+}
+
+/**
  * 쇄빙선 id → name_ko 매핑.
  * 항로별 호위 자산 (백엔드 FLEET_BY_ROUTE 와 동기화 유지 필수):
  *   NSR → 아라온(ib-araon) / NWP → CCGS(ib-ccgs) / TSR → 원자력(ib-rosatom)

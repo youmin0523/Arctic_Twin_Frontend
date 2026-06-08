@@ -9,10 +9,19 @@ const EVENT_STYLE = {
   return: { tag: '[RETURN]', color: '#9ca3af' },
   intercept_failed: { tag: '[FAIL]', color: '#b91c1c' },
   arrive: { tag: '[ARRIVE]', color: '#4ade80' },
+  rl_avoid_start: { tag: '[RL-AVOID]', color: '#22d3ee' },
+  rl_avoid_end: { tag: '[RL-CLEAR]', color: '#22d3ee' },
 };
 
 function fmtEvent(ev) {
   const style = EVENT_STYLE[ev.type] || { tag: `[${ev.type}]`, color: '#fff' };
+  // RL 회피 이벤트는 쇄빙선이 아니므로 회피 사유를 라벨로 사용.
+  if (ev.type === 'rl_avoid_start' || ev.type === 'rl_avoid_end') {
+    const kind = ev.avoidance_type === 'land' ? '육지' : '빙하';
+    const name =
+      ev.type === 'rl_avoid_start' ? `RL ${kind} 회피 시작` : `RL 회피 종료`;
+    return { ...style, name, t: ev.t, type: ev.type };
+  }
   const name = ICEBREAKER_META[ev.icebreaker_id]
     ? ICEBREAKER_META[ev.icebreaker_id].name_ko
     : ev.icebreaker_id;
