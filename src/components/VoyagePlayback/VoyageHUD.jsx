@@ -46,7 +46,7 @@ export default function VoyageHUD({ trace, tHours, currentRio, onClose }) {
   }
 
   const meta = trace.metadata;
-  const sum = trace.summary;
+  const sum = trace.summary || {}; // summary 누락 trace 방어(필드 접근 시 NaN/크래시 방지)
   const duration = meta.duration_hours;
   const rioColor = rioColorHex(currentRio ?? 0);
 
@@ -83,18 +83,18 @@ export default function VoyageHUD({ trace, tHours, currentRio, onClose }) {
       </div>
       <div className="voyage-hud-row">
         <span className="voyage-hud-key">Max RIO hit</span>
-        <span className="voyage-hud-val">{sum.max_rio_violation}</span>
+        <span className="voyage-hud-val">{sum.max_rio_violation ?? '—'}</span>
       </div>
       <div className="voyage-hud-row">
         <span className="voyage-hud-key">Calls</span>
         <span className="voyage-hud-val">
-          {sum.icebreaker_calls} / intercept_failed {sum.intercept_failed}
+          {sum.icebreaker_calls ?? 0} / intercept_failed {sum.intercept_failed ?? 0}
         </span>
       </div>
       <div className="voyage-hud-row">
         <span className="voyage-hud-key">Escorted</span>
         <span className="voyage-hud-val">
-          {sum.total_escort_distance_km.toFixed(1)} km
+          {(sum.total_escort_distance_km ?? 0).toFixed(1)} km
         </span>
       </div>
     </div>

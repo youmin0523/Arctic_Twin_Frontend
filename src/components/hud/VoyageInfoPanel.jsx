@@ -464,7 +464,7 @@ export default function VoyageInfoPanel({
                 fontSize: 9,
               }}
             >
-              {STATUS_LABEL[araon.status] || araon.status}
+              {STATUS_LABEL[araon.status] || araon.status || '—'}
             </span>
           )}
         </header>
