@@ -40,6 +40,7 @@ export default function useVoyagePlayback() {
   const iceClassRef = useRef(null);
   const monthRef = useRef(3);
   const routeRef = useRef('NSR');
+  const loadSeqRef = useRef(0); // trace 로드 순번 — 레이스(오래된 결과 덮어쓰기) 방지
 
   // state → ref 동기화
   useEffect(() => {
@@ -57,7 +58,9 @@ export default function useVoyagePlayback() {
     const tr = traceRef.current;
     if (!tr) return;
     const last = lastTsRef.current || ts;
-    const dtMs = ts - last;
+    // 탭 비활성/긴 GC 멈춤 후 복귀 시 dtMs 가 수 분치로 커져 재생이 크게 점프하고
+    // 그 구간 이벤트(eventsBetween)가 한꺼번에 쏟아지는 것 방지 — 프레임당 진행 상한.
+    const dtMs = Math.min(ts - last, 250);
     lastTsRef.current = ts;
 
     // 재생 속도: speed 배율 적용 (1 실시간 초 당 speed 시뮬 초)
@@ -128,8 +131,11 @@ export default function useVoyagePlayback() {
       // 비-북극 항로는 NSR trace 로 정규화 — voyage.route 도 실제 trace 키로 저장해
       // route-sync 이펙트가 불필요한 재로드를 일으키지 않게 한다.
       const routeKey = voyageRouteKey(rk || routeRef.current || 'NSR');
+      const seq = (loadSeqRef.current += 1);
       pause();
       const tr = await loadTrace(routeKey, cls, m);
+      // 로드 대기 중 더 최신 요청(월/항로/클래스 변경)이 시작됐으면 이 결과는 폐기.
+      if (seq !== loadSeqRef.current) return;
       traceRef.current = tr;
       setTrace(tr);
       iceClassRef.current = cls;
