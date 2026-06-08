@@ -548,7 +548,7 @@ function ServiceInfoPanel({ hud, shipHeading, currentRoute, evaluationResult, sp
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
     const vtype = vesselTypeMap[specs.type] || 'container';
     const iceCode = iceClassCodeMap[specs.iceClass] || 0;
     const enginePower = defaultEnginePower[specs.type] || 28000;
@@ -559,33 +559,38 @@ function ServiceInfoPanel({ hud, shipHeading, currentRoute, evaluationResult, sp
     // 빙하 두께는 농도에 기반한 추정값
     const iceThickness = Math.min(3.0, 0.3 + 2.0 * Math.pow(sicVal, 1.5));
 
-    setFuelLoading(true);
-    setFuelError(null);
-    compareFuelCost({
-      displacement: specs.displacement || 20000,
-      draft: specs.draft || 8.5,
-      engine_power: enginePower,
-      ice_class_code: iceCode,
-      nsr_ice_thickness: iceThickness,
-      nsr_ice_concentration: sicVal,
-      nsr_distance_nm: nsrDist,
-      suez_distance_nm: 12400,
-      vessel_type: vtype,
-      speed_knots: 14.0,
-    })
-      .then((data) => {
-        if (cancelled) return; // 더 최신 요청이 진행 중이면 무시
-        setFuelData(data);
-        setFuelLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setFuelError(err.message);
-        setFuelLoading(false);
-      });
+    // 디바운스: 항해 재생 중 의존성(특히 sicBucket)이 매 프레임 바뀌어도
+    // 마지막 변경 후 800ms 안정되면 1회만 호출한다. (과거 재생 중 effect가
+    // 폭주해 /api/fuel/compare 가 분당 수백~수천 회 호출 → Vercel 방화벽이
+    // 공격으로 판단해 사이트 전체를 403 으로 막은 사고가 있었다.)
+    const timer = setTimeout(() => {
+      setFuelLoading(true);
+      setFuelError(null);
+      compareFuelCost({
+        displacement: specs.displacement || 20000,
+        draft: specs.draft || 8.5,
+        engine_power: enginePower,
+        ice_class_code: iceCode,
+        nsr_ice_thickness: iceThickness,
+        nsr_ice_concentration: sicVal,
+        nsr_distance_nm: nsrDist,
+        suez_distance_nm: 12400,
+        vessel_type: vtype,
+        speed_knots: 14.0,
+      }, controller.signal)
+        .then((data) => {
+          setFuelData(data);
+          setFuelLoading(false);
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return; // 디바운스/언마운트로 취소된 요청
+          setFuelError(err.message);
+          setFuelLoading(false);
+        });
+    }, 800);
 
-    // 의존성 변경/언마운트 시 진행 중 요청 결과를 폐기
-    return () => { cancelled = true; };
+    // 의존성 변경/언마운트 시: 대기 중 호출 취소 + 진행 중 요청 abort
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [specs?.type, specs?.displacement, specs?.draft, specs?.iceClass, currentRoute, sicBucket]);
 
   const allRoutes = [
