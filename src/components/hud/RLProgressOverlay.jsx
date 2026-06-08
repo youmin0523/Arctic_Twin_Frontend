@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { smartPoll } from '../../services/smartPoll';
 
 const STAGE_STEPS = {
   easy: 100000, stage_1_basic: 100000,
@@ -17,7 +18,7 @@ const STAGE_COLOR = {
   hard: '#ef4444', stage_3_hard: '#ef4444',
 };
 
-const POLL_MS = 1500;
+const POLL_MS = 3000;
 
 const SHIP_LABELS = { bulk: '벌크선', tanker: '탱커', container: '컨테이너선', lng: 'LNG선' };
 const SHIP_COLORS = { bulk: '#60a5fa', tanker: '#f59e0b', container: '#34d399', lng: '#a78bfa' };
@@ -43,7 +44,7 @@ export default function RLProgressOverlay() {
       try {
         // RL 서버가 준비됐을 때만 폴링
         const health = await fetch('/api/health/services').then(r => r.ok ? r.json() : null).catch(() => null);
-        if (!health?.rl) { if (alive) setServerUp(false); return; }
+        if (!health?.rl) { if (alive) setServerUp(false); return false; } // 미준비/실패 → 백오프
 
         const [r1, r2, r3] = await Promise.allSettled([
           fetch('/api/rl/status'),
@@ -89,12 +90,13 @@ export default function RLProgressOverlay() {
             console.log(`[빙산회피 RL] 커리큘럼 학습 — 단계: ${stage} | 진행: ${pct}%`);
           }
         }
-      } catch { if (alive) setServerUp(false); }
+      } catch { if (alive) setServerUp(false); return false; }
     }
 
-    poll();
-    const id = setInterval(poll, POLL_MS);
-    return () => { alive = false; clearInterval(id); };
+    // 패널 열린 동안만 마운트되지만(조건부) 1.5초마다 4건 호출은 과함 →
+    // 3초 + 탭 비활성 정지 + 미준비/실패 시 백오프(최대 30초).
+    const stop = smartPoll(poll, { intervalMs: POLL_MS, maxIntervalMs: 30000 });
+    return () => { alive = false; stop(); };
   }, []);
 
   // 학습 중일 때 마지막 상태 스냅샷 저장

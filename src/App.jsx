@@ -46,6 +46,7 @@ import {
 } from './services/api';
 // SAR-RL 콜라보 (신규 모듈 — 기존 api.js 와 독립)
 import { fetchSarIcebergs } from './services/sarRlCollab';
+import { smartPoll } from './services/smartPoll';
 import {
   buildTimings,
   routePos,
@@ -492,6 +493,10 @@ function AppInner() {
           fetch('/api/rl/multi/status'),
           fetch('/api/report/rl/multi/status'),
         ]);
+        // 두 엔드포인트 모두 실패(502 등)면 실패 신호 → smartPoll 백오프
+        const bothFailed =
+          !(r1.status === 'fulfilled' && r1.value.ok) &&
+          !(r2.status === 'fulfilled' && r2.value.ok);
         const ships = [];
 
         // route별 TWP 캐시
@@ -562,12 +567,16 @@ function AppInner() {
         });
 
         if (alive) setRlShips(ships);
-      } catch {}
+        return bothFailed ? false : true;
+      } catch {
+        return false;
+      }
     }
 
-    pollMultiStatus();
-    const id = setInterval(pollMultiStatus, 3000);
-    return () => { alive = false; clearInterval(id); };
+    // 상시 폴러였으나(3초) Vercel DDoS 완화 오탐의 주원인 →
+    // 10초 + 탭 비활성 정지 + 502 백오프로 자체 트래픽 절감.
+    const stop = smartPoll(pollMultiStatus, { intervalMs: 10000, maxIntervalMs: 60000 });
+    return () => { alive = false; stop(); };
   }, []);
 
   // RL 선박 진행률 시간 기반 자동 증가 (3초 poll마다 += 0.0024, ~21분 1바퀴)
