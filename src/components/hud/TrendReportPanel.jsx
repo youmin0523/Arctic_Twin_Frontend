@@ -191,15 +191,19 @@ export default function TrendReportPanel({ open, onToggle }) {
           type="date"
           value={departureDate}
           onChange={(e) => setDepartureDate(e.target.value)}
+          onClick={(e) => { try { e.currentTarget.showPicker?.(); } catch (_) {} }}
           style={{
             width: '100%',
-            padding: '4px 6px',
+            padding: '7px 10px',
             background: '#0f172a',
             border: '1px solid #1e3a8a',
             borderRadius: 4,
             color: '#93c5fd',
-            fontSize: 11,
+            fontSize: 12,
             boxSizing: 'border-box',
+            colorScheme: 'dark',
+            cursor: 'pointer',
+            accentColor: '#2563eb',
           }}
         />
       </div>
