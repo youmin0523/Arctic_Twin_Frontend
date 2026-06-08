@@ -73,11 +73,30 @@ function lerp(a, b, f) {
 }
 
 export function lerpPosition(pa, pb, f) {
-  // 좌표 간격이 작은 경우(1h 스텝) 선형 lat/lon 근사로 충분.
+  // 경도차를 [-180,180]로 wrap → 날짜변경선(180°) 부근에서 단순 선형 보간이
+  // 358° 를 반대로 휘감아 지구 반바퀴를 도는(=화면에서 '튀는') 버그 방지.
+  // NSR 베링해 통과 본선/쇄빙선이 모두 180° 를 지난다.
+  let dLon = pb.lon - pa.lon;
+  if (dLon > 180) dLon -= 360;
+  else if (dLon < -180) dLon += 360;
+  let lon = pa.lon + dLon * f;
+  if (lon > 180) lon -= 360;
+  else if (lon < -180) lon += 360;
   return {
     lat: lerp(pa.lat, pb.lat, f),
-    lon: lerp(pa.lon, pb.lon, f),
+    lon,
   };
+}
+
+// 두 좌표 간 근사 거리(km) — 날짜변경선 wrap 반영. 텔레포트(데이터 리셋) 판정용.
+function approxKm(pa, pb) {
+  let dLon = pb.lon - pa.lon;
+  if (dLon > 180) dLon -= 360;
+  else if (dLon < -180) dLon += 360;
+  const meanLat = (((pa.lat + pb.lat) / 2) * Math.PI) / 180;
+  const x = dLon * 111.32 * Math.cos(meanLat);
+  const y = (pb.lat - pa.lat) * 110.57;
+  return Math.hypot(x, y);
 }
 
 /**
@@ -116,11 +135,20 @@ export function sampleIcebreakersAt(trace, tHours) {
   for (let i = 0; i < a.icebreakers.length; i += 1) {
     const ia = a.icebreakers[i];
     const ib = b.icebreakers[i];
+    // 호위 종료 후 trace 가 쇄빙선을 모항으로 즉시 리셋(원격 점프)하는 구간이 있다.
+    // 이를 선형 보간하면 화면에서 쇄빙선이 멀리 '튀어' 보이므로, 1틱(=1h)에
+    // 비현실적 거리(>50km)면 보간하지 않고 가까운 끝점으로 스냅한다.
+    // (실제 항행 이동은 ~30km/h 수준이라 정상 이동은 그대로 보간됨)
+    const jumpKm = approxKm(ia.position, ib.position);
+    const position =
+      jumpKm > 50
+        ? (frac < 0.5 ? ia.position : ib.position)
+        : lerpPosition(ia.position, ib.position, frac);
     out.push({
       id: ia.id,
       status: ia.status,
       escorting_ship_id: ia.escorting_ship_id,
-      position: lerpPosition(ia.position, ib.position, frac),
+      position,
     });
   }
   return out;
