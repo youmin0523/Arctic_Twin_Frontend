@@ -96,6 +96,7 @@ import {
   sampleShipAt,
   sampleIcebreakersAt,
   voyageRouteKey,
+  avoidanceSegmentAt,
 } from './services/voyageTrace';
 import {
   deriveSpeedKn as deriveVoySpeedKn,
@@ -384,6 +385,33 @@ function AppInner() {
           });
         }
       }
+    }
+  }, [voyageActive, voyage.trace, voyage.tHours]);
+
+  // ── Voyage 모드: RL 빙산 회피 강조 구동 ─────────────────────────────────
+  // trace 에 사전 베이크된 회피 세그먼트(metadata.rl_avoidance.segments)를 현재
+  // 재생 시각으로 판정해 SET_AVOIDANCE 를 토글. avoidanceActive → FollowMiniMap
+  // avoiding(청록 항로선 + "RL 빙하 회피" 배지)로 흘러 선미추적 화면에 표시된다.
+  // 이벤트가 아닌 세그먼트 selector 라 seek 로 윈도우 중간 진입해도 정확하다.
+  const voyAvoidActiveRef = useRef(false);
+  useEffect(() => {
+    if (!voyageActive || !voyage.trace) {
+      if (voyAvoidActiveRef.current) {
+        voyAvoidActiveRef.current = false;
+        dispatch({ type: 'SET_AVOIDANCE', payload: { active: false, type: null, method: null } });
+      }
+      return;
+    }
+    const seg = avoidanceSegmentAt(voyage.trace, voyage.tHours);
+    const active = !!seg;
+    if (active !== voyAvoidActiveRef.current) {
+      voyAvoidActiveRef.current = active;
+      dispatch({
+        type: 'SET_AVOIDANCE',
+        payload: active
+          ? { active: true, type: 'iceberg', method: 'RL' }
+          : { active: false, type: null, method: null },
+      });
     }
   }, [voyageActive, voyage.trace, voyage.tHours]);
 
@@ -2026,6 +2054,23 @@ function AppInner() {
     [dispatch, state.departurePort, state.arrivalPort],
   );
 
+  // 호위 쇄빙선 드롭다운 선택 = 항로 전환.
+  // 각 쇄빙선은 자기 관할 항로(모항 포함)에 묶여 있으므로, 쇄빙선을 고르면
+  // 해당 항로(NSR=아라온/NWP=CCGS/TSR=원자력)로 함께 전환해 항로·자산·모항을
+  // 항상 일치시킨다. → 호출(callAraon) 시 getAsset(=currentRouteKey)·항로 좌표·
+  // homeReachable 이 모두 정합되어 3종 모두 정상 호출/이동.
+  const ESCORT_ROUTE_BY_ID = { araon: 'NSR', ccgs: 'NWP', rosatom: 'TSR' };
+  const handleEscortSelect = useCallback(
+    (escortId) => {
+      const routeKey = ESCORT_ROUTE_BY_ID[escortId];
+      if (!routeKey) return;
+      // 표시 전용 오버라이드 잔재 제거(이제 항로가 자산을 구동) 후 항로 전환.
+      setEscortOverrideId(null);
+      if (currentRouteKeyRef.current !== routeKey) handleRouteSelect(routeKey);
+    },
+    [handleRouteSelect],
+  );
+
   const handleSpecChange = useCallback(
     (field, value) => {
       dispatch({ type: 'SET_SHIP_SPECS', payload: { [field]: value } });
@@ -3346,7 +3391,7 @@ function AppInner() {
             visible={state.currentMode === 'FOLLOW'}
             shipPos={state.shipState}
             heading={state.shipState.heading}
-            waypoints={waypoints}
+            waypoints={routeDisplayWaypoints}
             departurePort={PORTS[state.departurePort] || PORTS.BUSAN}
             arrivalPort={PORTS[state.arrivalPort] || PORTS.ROTTERDAM}
             araonPos={araonDisplayPos}
@@ -3443,7 +3488,7 @@ function AppInner() {
               escortAsset={activeEscortAsset}
               escortOptions={ESCORT_OPTIONS}
               escortSelectedId={activeEscortAsset?.id || 'araon'}
-              onEscortSelect={setEscortOverrideId}
+              onEscortSelect={handleEscortSelect}
               onFlyToEscort={handleFlyToEscort}
               araonControl={
                 !voyageActive && isArcticRoute
