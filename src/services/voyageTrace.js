@@ -124,7 +124,7 @@ export function sampleShipAt(trace, tHours) {
 }
 
 /**
- * 현재 시각의 쇄빙선 5척 상태 보간.
+ * 현재 시각의 쇄빙선 상태 보간(trace 의 icebreakers 배열 전체 — 현재 항로당 1척).
  * status 는 보간하지 않고 a tick 의 값 사용 (이산 상태).
  */
 export function sampleIcebreakersAt(trace, tHours) {

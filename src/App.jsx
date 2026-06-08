@@ -240,7 +240,7 @@ function AppInner() {
       araonInfo = {
         ...araonInfo,
         position: formatLatLonShort(araon.position),
-        statusKo: ARAON_STATUS_KO[araon.status] || araon.status,
+        statusKo: ARAON_STATUS_KO[araon.status] || araon.status || '—',
       };
     }
   }
