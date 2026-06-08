@@ -344,7 +344,13 @@ function AppInner() {
     // 아라온 3D 위치 주입
     if (three.setAraonState) {
       const ibs = sampleIcebreakersAt(voyage.trace, voyage.tHours);
-      const araon = ibs.find((x) => x.id === 'ib-araon');
+      // 호위 쇄빙선 id 는 항로별로 다르다(NSR=ib-araon/NWP=ib-ccgs/TSR=ib-rosatom).
+      // 'ib-araon' 하드코딩 탓에 NWP·TSR 에선 못 찾아 선미추적에 쇄빙선이 아예
+      // 안 떴음. 호위/랑데부 중인 것을 우선, 없으면 trace 의 첫 쇄빙선을 사용.
+      const araon =
+        ibs.find((x) => x.status === 'escorting' || x.status === 'rendezvous') ||
+        ibs[0] ||
+        null;
       if (!araon) {
         three.setAraonState(null);
       } else {
