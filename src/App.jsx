@@ -1973,8 +1973,10 @@ function AppInner() {
         ) {
           const depPort = PORTS[state.departurePort] || PORTS.BUSAN;
           const METERS_PER_DEGREE_LAT = 111132.954;
+          // 경도 스케일은 '현재 위도'(pos.lat) 기준이어야 함 — 출발항 위도(depPort.lat)를
+          // 쓰면 고위도(북극)에서 cos 비율이 수배 틀어져 선박 x좌표가 어긋났다(시뮬 루프와 통일).
           const mPerDegLon =
-            111319.491 * Math.cos((depPort.lat * Math.PI) / 180);
+            111319.491 * Math.cos((pos.lat * Math.PI) / 180);
           threeRef.current.shipPivot.position.x =
             ((pos.lon - depPort.lon) * mPerDegLon) / 1.5;
           threeRef.current.shipPivot.position.z =
