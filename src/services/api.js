@@ -109,11 +109,12 @@ export async function fetchFuelHealth() {
  * @param {number} params.speed_knots - 운항 속도 (knots)
  * @returns {Promise<Object>} 비교 결과 { nsr, suez, comparison }
  */
-export async function compareFuelCost(params) {
+export async function compareFuelCost(params, signal) {
   const res = await fetch(`${API_BASE}/fuel/compare`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
+    signal,
   });
   if (!res.ok) throw new Error(`compareFuelCost failed: ${res.status} ${res.statusText}`);
   return res.json();
