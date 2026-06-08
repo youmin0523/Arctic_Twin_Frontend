@@ -58,12 +58,21 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
 // 항로별 자산 시각특성(아라온/CCGS/원자력)을 동일 규칙으로 그린다.
 // (본선 캔버스 함수 삭제 — 기존 CesiumGlobe.updateShipEntity 재사용)
 
-export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }) {
+export default function VoyagePlaybackLayer({
+  cesiumRef,
+  trace,
+  tHours,
+  active,
+  currentModeRef,
+  userCameraInteractingRef,
+  dispatch,
+}) {
   const ibEntitiesRef = useRef({}); // id → entity
   const lastTickLogRef = useRef(0);
   const ibCanvasRef = useRef(null);
   const lastIbPosRef = useRef({});  // id → {lat, lon} (직전 tick 위치 — heading 계산용)
   const lastShipPosRef = useRef(null); // 본선 직전 위치 (heading 계산용)
+  const lastShipHdgRef = useRef(0);    // 본선 직전 heading (정지 시 유지용)
 
   // entity 생성 (trace 로드 시점)
   useEffect(() => {
@@ -193,8 +202,9 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
 
     const ship = sampleShipAt(trace, tHours);
     if (ship && cesiumRef.current && cesiumRef.current.updateShipEntity) {
-      // 본선 heading 계산 (직전 위치 → 현재 위치)
-      let shipHdg = 0;
+      // 본선 heading 계산 (직전 위치 → 현재 위치). 정지(같은 위치)/seek 시엔
+      // 직전 heading 유지 — 0(정북)으로 튀어 뱃머리가 홱 도는 것 방지.
+      let shipHdg = lastShipHdgRef.current;
       const lastShip = lastShipPosRef.current;
       if (
         lastShip &&
@@ -208,11 +218,56 @@ export default function VoyagePlaybackLayer({ cesiumRef, trace, tHours, active }
         );
       }
       lastShipPosRef.current = { lat: ship.position.lat, lon: ship.position.lon };
+      lastShipHdgRef.current = shipHdg;
       cesiumRef.current.updateShipEntity(
         ship.position,
         shipHdg,
         { type: 'icebreaker' },
       );
+
+      // shipState 동기화 — Voyage 는 Live 시뮬 루프가 돌지 않아 state.shipState 가
+      // 갱신되지 않는다. 모드 전환 flyTo([App] handleModeChange), FollowMiniMap,
+      // 컴퍼스가 모두 이 값을 쓰므로 매 tick 본선 위치/heading 을 반영한다.
+      if (dispatch) {
+        dispatch({
+          type: 'SET_SHIP_STATE',
+          payload: {
+            lat: ship.position.lat,
+            lon: ship.position.lon,
+            heading: shipHdg,
+          },
+        });
+      }
+
+      // ── Cesium 카메라 추적 (SATELLITE/WIDE 모드 전용) ──
+      // Live 모드는 시뮬 루프(App.jsx)가 카메라를 따라가게 하지만, Voyage 는
+      // 그 루프가 돌지 않으므로 여기서 동일 로직을 수행한다. 사용자가 직접
+      // 카메라를 조작 중이면 양보. FOLLOW 는 Three.js 선미추적이 별도 담당.
+      const curMode = currentModeRef?.current;
+      const interacting = userCameraInteractingRef?.current;
+      if (!interacting && (curMode === 'SATELLITE' || curMode === 'WIDE')) {
+        try {
+          const camPos = viewer.camera.positionCartographic;
+          const currentAlt = camPos
+            ? camPos.height
+            : curMode === 'WIDE'
+              ? 3000000
+              : 120000;
+          const target = Cesium.Cartesian3.fromDegrees(
+            ship.position.lon,
+            ship.position.lat,
+          );
+          const pitch = viewer.camera.pitch;
+          const range = currentAlt / Math.sin(Math.abs(pitch));
+          viewer.camera.lookAt(
+            target,
+            new Cesium.HeadingPitchRange(viewer.camera.heading, pitch, range),
+          );
+          viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+        } catch (e) {
+          /* viewer 파괴 등 — 무시 */
+        }
+      }
     }
 
     const ibs = sampleIcebreakersAt(trace, tHours);
