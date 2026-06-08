@@ -82,6 +82,11 @@ export function startSarPolling(onUpdate, intervalMs = 30 * 1000) {
 
   async function tick() {
     if (stopped) return;
+    // 백그라운드 탭에서는 호출 생략 — 다음 주기에 재확인(자체 트래픽 절감).
+    if (typeof document !== 'undefined' && document.hidden) {
+      timer = setTimeout(tick, intervalMs);
+      return;
+    }
     try {
       const data = await fetchSarIcebergs();
       onUpdate({
