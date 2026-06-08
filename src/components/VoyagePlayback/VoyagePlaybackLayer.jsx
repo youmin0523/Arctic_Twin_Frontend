@@ -1,7 +1,7 @@
 /**
  * VoyagePlaybackLayer.jsx
  * =======================
- * Cesium viewer 에 본선 1척 + 쇄빙선 5척 entity 를 생성·갱신하는
+ * Cesium viewer 에 본선 1척 + 항로별 호위 쇄빙선(현재 trace 당 1척) entity 를 생성·갱신하는
  * headless 컴포넌트. DOM 출력 없음, 사이드 이펙트만.
  *
  * 부모는 `cesiumRef` (CesiumGlobe ref) 와 playback state 를 props 로 주입.
