@@ -29,11 +29,18 @@ export default function TrendReportPanel({ open, onToggle }) {
   const [genComplete, setGenComplete] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);   // blob: object URL
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
   const genJobRef = useRef(null);
   const genPollRef = useRef(null);
+  const previewUrlRef = useRef(null);                    // revoke 용 최신 URL 추적
 
-  // 언마운트(패널 닫기 등) 시 진행 중인 폴링 인터벌 정리 — setState-after-unmount/런어웨이 폴링 방지
-  useEffect(() => () => { if (genPollRef.current) clearInterval(genPollRef.current); }, []);
+  // 언마운트(패널 닫기 등) 시 진행 중인 폴링 인터벌 + blob URL 정리
+  useEffect(() => () => {
+    if (genPollRef.current) clearInterval(genPollRef.current);
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
 
   // RL 모델은 백엔드에서 이미 학습된 ONNX 모델 자동 로드 (backend/model/report-service/*.onnx)
   // 그래서 UI 학습 버튼/진행률 표시 제거됨. 보고서 생성 시 자동으로 추론에 사용.
@@ -46,6 +53,10 @@ export default function TrendReportPanel({ open, onToggle }) {
     setGenComplete(false);
     setShowPreview(false);
     setJobId(null);
+    // 이전 미리보기 blob 정리 (새 보고서는 새로 받아야 함)
+    if (previewUrlRef.current) { URL.revokeObjectURL(previewUrlRef.current); previewUrlRef.current = null; }
+    setPreviewUrl(null);
+    setPreviewError('');
 
     try {
       const res = await fetch('/api/report/generate', {
@@ -91,17 +102,50 @@ export default function TrendReportPanel({ open, onToggle }) {
     }
   }, [route, iceClass, departureDate, forecastDays, transitDays]);
 
-  // PDF 다운로드 (Content-Disposition: attachment → 파일 저장)
-  const downloadPdf = useCallback(() => {
-    if (genJobRef.current) {
-      window.open(`/api/report/download/${genJobRef.current}`, '_blank');
+  // 미리보기 열기 — PDF 를 한 번만 fetch 해 blob URL 로 만든다.
+  // blob: URL 은 same-origin 이라 프록시 헤더/Content-Disposition 영향 없이
+  // iframe 에 확실히 inline 렌더링되고, 다운로드도 같은 blob 을 재사용한다.
+  const openPreview = useCallback(async () => {
+    if (!genJobRef.current) return;
+    setShowPreview(true);
+    setPreviewError('');
+
+    // 이미 받아둔 blob 이 있으면 재사용
+    if (previewUrlRef.current) return;
+
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(`/api/report/preview/${genJobRef.current}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      previewUrlRef.current = url;
+      setPreviewUrl(url);
+    } catch (e) {
+      setPreviewError('미리보기를 불러오지 못했습니다 (' + (e.message || 'error') + ')');
+    } finally {
+      setPreviewLoading(false);
     }
   }, []);
 
-  // PDF 미리보기 (앱 내 오버레이 iframe — inline 렌더링, 디스크 미저장)
-  const openPreview = useCallback(() => {
-    if (genJobRef.current) setShowPreview(true);
-  }, []);
+  // PDF 다운로드 — 미리보기로 받아둔 blob 이 있으면 재사용(추가 요청 없음),
+  // 없으면 다운로드 엔드포인트로 직접 저장.
+  const downloadPdf = useCallback(() => {
+    // 파일명: arctic_report_<route>_<iceClass>_<YYYYMMDD>.pdf
+    // 날짜는 출발일 기준(미선택 시 오늘), ice class 공백 제거
+    const dateStr = (departureDate || new Date().toISOString().slice(0, 10)).replace(/-/g, '');
+    const filename = `arctic_report_${route}_${iceClass.replace(/\s+/g, '')}_${dateStr}.pdf`;
+    if (previewUrlRef.current) {
+      const a = document.createElement('a');
+      a.href = previewUrlRef.current;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } else if (genJobRef.current) {
+      window.open(`/api/report/download/${genJobRef.current}`, '_blank');
+    }
+  }, [route, iceClass, departureDate]);
 
   if (collapsed) return null;
 
@@ -419,12 +463,45 @@ export default function TrendReportPanel({ open, onToggle }) {
               </span>
             </div>
           </div>
-          {/* PDF iframe */}
-          <iframe
-            title="Trend Report PDF Preview"
-            src={`/api/report/preview/${jobId}`}
-            style={{ flex: '1 1 auto', width: '100%', border: 'none', background: '#525659' }}
-          />
+          {/* PDF 본문: blob URL 로 inline 렌더링 */}
+          <div style={{ flex: '1 1 auto', position: 'relative', background: '#525659' }}>
+            {previewLoading && (
+              <div style={{
+                position: 'absolute', inset: 0,
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                color: '#cbd5e1', fontSize: 13, gap: 12,
+                fontFamily: "'Segoe UI', system-ui, sans-serif",
+              }}>
+                <div style={{
+                  width: 36, height: 36,
+                  border: '3px solid rgba(147,197,253,0.25)',
+                  borderTopColor: '#60a5fa',
+                  borderRadius: '50%',
+                  animation: 'dt-spin 0.8s linear infinite',
+                }} />
+                <div>미리보기 불러오는 중...</div>
+                <style>{`@keyframes dt-spin { to { transform: rotate(360deg); } }`}</style>
+              </div>
+            )}
+            {previewError && !previewLoading && (
+              <div style={{
+                position: 'absolute', inset: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fca5a5', fontSize: 13, textAlign: 'center', padding: 20,
+                fontFamily: "'Segoe UI', system-ui, sans-serif",
+              }}>
+                {previewError}
+              </div>
+            )}
+            {previewUrl && !previewLoading && (
+              <iframe
+                title="Trend Report PDF Preview"
+                src={previewUrl}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+              />
+            )}
+          </div>
         </div>
       </div>
     )}
