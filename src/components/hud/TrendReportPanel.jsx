@@ -27,6 +27,8 @@ export default function TrendReportPanel({ open, onToggle }) {
   const [genProgress, setGenProgress] = useState(0);
   const [genStage, setGenStage] = useState('');
   const [genComplete, setGenComplete] = useState(false);
+  const [jobId, setJobId] = useState(null);
+  const [showPreview, setShowPreview] = useState(false);
   const genJobRef = useRef(null);
   const genPollRef = useRef(null);
 
@@ -42,6 +44,8 @@ export default function TrendReportPanel({ open, onToggle }) {
     setGenProgress(0);
     setGenStage('STARTING...');
     setGenComplete(false);
+    setShowPreview(false);
+    setJobId(null);
 
     try {
       const res = await fetch('/api/report/generate', {
@@ -57,6 +61,7 @@ export default function TrendReportPanel({ open, onToggle }) {
       });
       const data = await res.json();
       genJobRef.current = data.job_id;
+      setJobId(data.job_id);
 
       genPollRef.current = setInterval(async () => {
         try {
@@ -86,11 +91,16 @@ export default function TrendReportPanel({ open, onToggle }) {
     }
   }, [route, iceClass, departureDate, forecastDays, transitDays]);
 
-  // PDF 다운로드
+  // PDF 다운로드 (Content-Disposition: attachment → 파일 저장)
   const downloadPdf = useCallback(() => {
     if (genJobRef.current) {
       window.open(`/api/report/download/${genJobRef.current}`, '_blank');
     }
+  }, []);
+
+  // PDF 미리보기 (앱 내 오버레이 iframe — inline 렌더링, 디스크 미저장)
+  const openPreview = useCallback(() => {
+    if (genJobRef.current) setShowPreview(true);
   }, []);
 
   if (collapsed) return null;
@@ -296,28 +306,128 @@ export default function TrendReportPanel({ open, onToggle }) {
         </div>
       )}
 
-      {/* Download button */}
+      {/* Preview (primary) + Download (secondary) */}
       {genComplete && (
-        <button
-          onClick={downloadPdf}
-          style={{
-            width: '100%',
-            marginTop: 8,
-            padding: '8px 0',
-            background: 'linear-gradient(135deg,#065f46,#047857)',
-            border: '1px solid #059669',
-            borderRadius: 6,
-            color: '#d1fae5',
-            fontSize: 12,
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            letterSpacing: 0.5,
-          }}
-        >
-          DOWNLOAD PDF
-        </button>
+        <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+          <button
+            onClick={openPreview}
+            style={{
+              flex: 2,
+              padding: '8px 0',
+              background: 'linear-gradient(135deg,#1e40af,#1d4ed8)',
+              border: '1px solid #2563eb',
+              borderRadius: 6,
+              color: '#e0f0ff',
+              fontSize: 12,
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              letterSpacing: 0.5,
+            }}
+          >
+            PREVIEW REPORT
+          </button>
+          <button
+            onClick={downloadPdf}
+            title="PDF 파일로 저장"
+            style={{
+              flex: 1,
+              padding: '8px 0',
+              background: 'rgba(5,150,105,0.15)',
+              border: '1px solid #059669',
+              borderRadius: 6,
+              color: '#34d399',
+              fontSize: 12,
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              letterSpacing: 0.5,
+            }}
+          >
+            ↓ PDF
+          </button>
+        </div>
       )}
     </div>
+
+    {/* PDF 미리보기 오버레이 (inline 렌더링 — 디스크에 저장하지 않음) */}
+    {showPreview && jobId && (
+      <div
+        onClick={() => setShowPreview(false)}
+        style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.7)',
+          zIndex: 600,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '3vh 3vw',
+          backdropFilter: 'blur(3px)',
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            width: '100%',
+            maxWidth: 900,
+            height: '94vh',
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'rgba(10, 15, 35, 0.98)',
+            border: '1px solid #1e3a8a',
+            borderRadius: 10,
+            overflow: 'hidden',
+            boxShadow: '0 8px 40px rgba(0,0,0,0.8)',
+          }}
+        >
+          {/* Preview header */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '10px 14px',
+            borderBottom: '1px solid #1e3a8a',
+            flex: '0 0 auto',
+          }}>
+            <div style={{
+              fontSize: 13, fontWeight: 'bold', color: '#93c5fd',
+              letterSpacing: 1, fontFamily: "'Segoe UI', system-ui, sans-serif",
+            }}>
+              REPORT PREVIEW — {route} / {iceClass}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button
+                onClick={downloadPdf}
+                style={{
+                  padding: '6px 14px',
+                  background: 'linear-gradient(135deg,#065f46,#047857)',
+                  border: '1px solid #059669',
+                  borderRadius: 6,
+                  color: '#d1fae5',
+                  fontSize: 12,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  letterSpacing: 0.5,
+                }}
+              >
+                ↓ DOWNLOAD PDF
+              </button>
+              <span
+                onClick={() => setShowPreview(false)}
+                style={{ cursor: 'pointer', color: '#6b89b0', fontSize: 20, lineHeight: 1, padding: '0 4px' }}
+              >
+                ×
+              </span>
+            </div>
+          </div>
+          {/* PDF iframe */}
+          <iframe
+            title="Trend Report PDF Preview"
+            src={`/api/report/preview/${jobId}`}
+            style={{ flex: '1 1 auto', width: '100%', border: 'none', background: '#525659' }}
+          />
+        </div>
+      </div>
+    )}
     </>
   );
 }
