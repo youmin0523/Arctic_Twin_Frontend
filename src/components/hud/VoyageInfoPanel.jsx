@@ -429,7 +429,7 @@ export default function VoyageInfoPanel({
             <select
               value={escortSelectedId || 'araon'}
               onChange={(e) => onEscortSelect(e.target.value)}
-              title="호위 쇄빙선 선택 (검증용 — 선택 시 해당 자산 모항 표시)"
+              title="호위 쇄빙선 선택 — 선택 시 해당 항로(NSR=아라온/NWP=CCGS/TSR=원자력)로 전환"
               style={{
                 background: 'rgba(15,23,42,0.9)',
                 color: '#facc15',
