@@ -3364,6 +3364,9 @@ function AppInner() {
                 trace={voyage.trace}
                 tHours={voyage.tHours}
                 active={voyageActive}
+                currentModeRef={currentModeRef}
+                userCameraInteractingRef={userCameraInteracting}
+                dispatch={dispatch}
               />
               {voyageHudVisible && (
                 <VoyageHUD
