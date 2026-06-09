@@ -129,8 +129,9 @@ export async function rerouteAroundIceberg(
   const startWp = waypoints[startIdx];
   const endWp = waypoints[endIdx];
 
-  // 북극 구간(65°N 이상)이 아니면 우회 불가
-  if (startWp.lat < 65 && endWp.lat < 65) {
+  // 극권(|위도|≥55°) 구간이 아니면 우회 불가 — 북극(≥55°N)·남극(≤−55°S) 모두 허용.
+  //   findArcticPath 가 출발 위도 부호로 북/남극 격자를 자동 선택한다.
+  if (Math.abs(startWp.lat) < 55 && Math.abs(endWp.lat) < 55) {
     return { rerouted: false, newWaypoints: waypoints };
   }
 
