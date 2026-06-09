@@ -9,8 +9,9 @@ const API_BASE = '/api';
  * @param {string} month - Month identifier or 'latest'
  * @returns {Promise<Object>} Ice concentration data
  */
-export async function fetchIceConcentration(month = 'latest') {
-  const res = await fetch(`${API_BASE}/ice/concentration?month=${encodeURIComponent(month)}`);
+export async function fetchIceConcentration(month = 'latest', hemisphere = 'north') {
+  const h = hemisphere === 'south' ? '&hemisphere=south' : '';
+  const res = await fetch(`${API_BASE}/ice/concentration?month=${encodeURIComponent(month)}${h}`);
   if (!res.ok) throw new Error(`fetchIceConcentration failed: ${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -34,10 +35,12 @@ export async function fetchIceThickness(month = 'latest') {
  *   latest로 폴백한다. 과거(date/month) 요청은 현재 시점 Copernicus SAR를 제외.
  * @returns {Promise<Object>} Iceberg data
  */
-export async function fetchIcebergs(month = 'latest') {
-  let q = '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(month)) q = `?date=${encodeURIComponent(month)}`;
-  else if (/^(?:month-)?\d{2}$/.test(month)) q = `?month=${encodeURIComponent(month)}`;
+export async function fetchIcebergs(month = 'latest', hemisphere = 'north') {
+  const params = new URLSearchParams();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(month)) params.set('date', month);
+  else if (/^(?:month-)?\d{2}$/.test(month)) params.set('month', month);
+  if (hemisphere === 'south') params.set('hemisphere', 'south');
+  const q = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`${API_BASE}/icebergs/latest${q}`);
   if (!res.ok) throw new Error(`fetchIcebergs failed: ${res.status} ${res.statusText}`);
   return res.json();

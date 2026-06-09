@@ -456,6 +456,8 @@ function AppInner() {
   const toastTimerRef = useRef(null);
   // 월 변경 비동기 레이스 가드: 빠른 월 전환 시 늦게 도착한 이전 요청이 최신 결과를 덮어쓰지 않도록 시퀀스 토큰 사용
   const monthChangeSeqRef = useRef(0);
+  // 마지막으로 로드한 해빙 월/모드 — 항로 반구 전환 시 같은 월로 재로드하는 데 사용
+  const lastIceMonthRef = useRef('live');
   // 누적 알림 로그 (육지/빙산 경고·회피 적용 등) — 최근 80개 유지
   const [notifLog, setNotifLog] = useState([]);
   const notifSeqRef = useRef(0);
@@ -1568,6 +1570,8 @@ function AppInner() {
     TSR: false,
     SUEZ: false,
     CAPE: false,
+    ROSS: false,
+    PENINSULA: false,
     ETC: false,
   });
   const handleRouteVisibilityChange = useCallback((key, visible) => {
@@ -2100,6 +2104,20 @@ function AppInner() {
   const handleRouteSelect = useCallback(
     (routeKey) => {
       dispatch({ type: 'SET_ROUTE', payload: routeKey });
+      // 남극 항로(ROSS/PENINSULA)는 관문항↔기지 고정 경로라 출발/도착항을 함께
+      // 전환한다(부산→로테르담이 남으면 베이스 경로 끝점이 엉뚱하게 스냅됨).
+      //   ROSS → 리틀턴 → 장보고 / PENINSULA → 푼타아레나스 → 세종
+      const ANTARCTIC_PORTS = {
+        ROSS: { dep: 'LYTTELTON', arr: 'JANGBOGO' },
+        PENINSULA: { dep: 'PUNTA_ARENAS', arr: 'SEJONG' },
+      };
+      const apPair = ANTARCTIC_PORTS[routeKey];
+      let effDeparture = state.departurePort;
+      if (apPair) {
+        dispatch({ type: 'SET_DEPARTURE_PORT', payload: apPair.dep });
+        dispatch({ type: 'SET_ARRIVAL_PORT', payload: apPair.arr });
+        effDeparture = apPair.dep;
+      }
       // 양방향 동기화: 활성 항로(자동항해)와 목표 항로(타당성 평가)를 한 항로로 일치.
       // → ROUTES에서 고르든 SHIP DESIGN INFO에서 고르든 평가 대상=항해 대상.
       dispatch({ type: 'SET_DESIGN_ROUTE', payload: routeKey });
@@ -2116,7 +2134,7 @@ function AppInner() {
 
       // 새 항로의 첫 waypoint와 두 번째 waypoint 사이의 bearing 으로 초기 heading 설정
       // (출발항에서 즉시 정확한 방향 표시 — 다음 sim tick 까지 깜빡임 방지)
-      const depPort = PORTS[state.departurePort] || PORTS.BUSAN;
+      const depPort = PORTS[effDeparture] || PORTS.BUSAN;
       // ETC(기타) 는 ROUTES 데이터가 없으므로 출발항→도착항 직선 방향을 사용
       const newWps =
         routeKey === 'ETC'
@@ -2236,6 +2254,12 @@ function AppInner() {
   const handleMonthChange = useCallback(
     async (month) => {
       const apiMonth = month === 'live' ? 'latest' : month;
+      lastIceMonthRef.current = month;
+
+      // 활성 항로 반구 판정 — 남극(ROSS/PENINSULA)이면 남반구 해빙/빙산 로드.
+      const rk = currentRouteKeyRef.current;
+      const hemisphere = rk === 'ROSS' || rk === 'PENINSULA' ? 'south' : 'north';
+      const isSouth = hemisphere === 'south';
 
       // 레이스 가드: 이 호출의 시퀀스 번호 확보. 이후 await 뒤 최신 호출이 아니면 중단.
       const seq = ++monthChangeSeqRef.current;
@@ -2249,7 +2273,7 @@ function AppInner() {
 
       // ── 2. 백엔드 해빙 데이터 로드 (DeckOverlay + ThreeOverlay) ──
       try {
-        const iceData = await fetchIceConcentration(apiMonth);
+        const iceData = await fetchIceConcentration(apiMonth, hemisphere);
         if (isStale()) return; // 더 최신 월 변경이 진행 중 → 이 결과는 폐기
 
         // DeckOverlay 포맷으로 변환
@@ -2274,13 +2298,13 @@ function AppInner() {
           //   ※ 과거엔 아카이브 모드에서 해빙 "농도" 셀(≥0.8)을 빙산으로 둔갑시켜
           //     북극 전역에 노란 점이 폭증했음 → 실측 빙산으로 통일해 버그 제거.
           try {
-            const bergData = await fetchIcebergs(apiMonth);
+            const bergData = await fetchIcebergs(apiMonth, hemisphere);
             // 업데이트 시간 저장 (클릭 팝업에서 사용)
             if (bergData?.updated_at && viewer) {
               viewer._bergUpdatedAt = bergData.updated_at;
             }
             bergList = (bergData?.bergs || [])
-              .filter((b) => b.lat >= 0) // 북반구만
+              .filter((b) => (isSouth ? b.lat < 0 : b.lat >= 0)) // 활성 항로 반구만
               .map((b) => ({
                 id: b.id,
                 lon: b.lon,
@@ -2294,8 +2318,9 @@ function AppInner() {
             console.warn('[BergData] fetch 실패:', e.message);
           }
 
-          if (isLive) {
-            // ── SAR-RL 콜라보: SAR YOLOv8 탐지 빙하 추가 병합 (Live 전용) ────────────
+          if (isLive && !isSouth) {
+            // ── SAR-RL 콜라보: SAR YOLOv8 탐지 빙하 추가 병합 (Live·북극 전용) ────────
+            // Sentinel-1 SAR 빙하 탐지는 북극 회랑 전용 → 남극 항로에선 건너뜀.
             // 신규 /api/collab/sar-icebergs 엔드포인트에서 가져옴.
             // 실패해도 기존 berg 흐름은 그대로 진행 (graceful).
             try {
@@ -2599,6 +2624,22 @@ function AppInner() {
     },
     [state.shipState, dispatch, showToast],
   );
+
+  // 항로 반구 전환(북↔남) 시 같은 월로 해빙/빙산 재로드. handleMonthChange 는
+  // shipState 등으로 자주 갱신되므로 ref 로 최신 콜백을 잡아 effect 의존성에서 제외
+  // (매 프레임 재로드 방지). 최초 마운트는 기존 초기 로드와 중복이라 건너뜀.
+  const handleMonthChangeRef = useRef(handleMonthChange);
+  handleMonthChangeRef.current = handleMonthChange;
+  const activeRouteIsSouth =
+    state.currentRouteKey === 'ROSS' || state.currentRouteKey === 'PENINSULA';
+  const hemisphereMountedRef = useRef(false);
+  useEffect(() => {
+    if (!hemisphereMountedRef.current) {
+      hemisphereMountedRef.current = true;
+      return;
+    }
+    handleMonthChangeRef.current(lastIceMonthRef.current || 'live');
+  }, [activeRouteIsSouth]);
 
   // API 레이어 토글
   // sampleIce: 격자 캐시에서 O(1) 해빙 농도 조회
