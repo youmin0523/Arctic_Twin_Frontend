@@ -27,11 +27,15 @@ export async function fetchIceThickness(month = 'latest') {
 }
 
 /**
- * Fetch current iceberg positions.
+ * Fetch iceberg positions.
+ * @param {string} month - 'latest'(live) 또는 'YYYY-MM-DD'(빙하 아카이브 날짜).
+ *   날짜 지정 시 해당 시점 실측 빙산 아카이브를 반환하며, 스냅샷이 없으면
+ *   백엔드가 latest로 폴백한다. 월별 값('month-06')은 latest로 처리됨.
  * @returns {Promise<Object>} Iceberg data
  */
-export async function fetchIcebergs() {
-  const res = await fetch(`${API_BASE}/icebergs/latest`);
+export async function fetchIcebergs(month = 'latest') {
+  const q = /^\d{4}-\d{2}-\d{2}$/.test(month) ? `?date=${encodeURIComponent(month)}` : '';
+  const res = await fetch(`${API_BASE}/icebergs/latest${q}`);
   if (!res.ok) throw new Error(`fetchIcebergs failed: ${res.status} ${res.statusText}`);
   return res.json();
 }
