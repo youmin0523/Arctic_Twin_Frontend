@@ -19,6 +19,7 @@
  */
 
 import { sampleShipAt, interpolateAt } from './voyageTrace';
+import { calculateRIO } from './polarisRIO';
 
 const KTS_PER_MS = 1.94384;
 const DEG2RAD = Math.PI / 180;
@@ -242,6 +243,187 @@ export function derivePassBadge(preview) {
     return { level: 'marginal', label: 'MARGINAL', color: '#facc15' };
   }
   return { level: 'pass', label: 'PASS', color: '#4ade80' };
+}
+
+// ── Live 모드 전방 프리뷰 ───────────────────────────────────────────────
+// Voyage 모드는 사전 시뮬레이션 trace 의 미래 tick 을 읽어 전방을 그리지만,
+// Live 모드는 그런 미래 tick 이 없다. 대신 "본선이 따라가는 활성 항로(activeWaypoints)"
+// 위를 현재 위치 기준 전방으로 투영하며 실측 얼음 농도를 샘플링해, 같은 형태의
+// 프리뷰 배열을 합성한다(= 전방 항로의 현재 빙상 스캔).
+//
+// RIO 는 voyage trace 와 동일한 분수(0~1 농도) 스케일로 계산되므로 derivePassBadge 의
+// 임계값(-3/-6)과 그대로 호환된다. 두께는 Live 모드 기존 추정식(0.3 + sic·2.0,
+// App.jsx 의 voyageIceContext 와 동일)을 재사용한다.
+
+/** 경도 wrap(±180/날짜변경선) 보정 — ref 기준 [-180,180) 범위로 펼침. NSR 등 180° 횡단 항로 대응. */
+function unwrapLon(lon, ref) {
+  let d = lon - ref;
+  while (d > 180) { lon -= 360; d -= 360; }
+  while (d < -180) { lon += 360; d += 360; }
+  return lon;
+}
+
+function normalizeLon(lon) {
+  return ((lon + 540) % 360) - 180;
+}
+
+/** SIC(0~1) → 추정 해빙 두께(m). 개빙수역(<0.05)은 0. (App.jsx voyageIceContext 와 동일 식) */
+function estThicknessFromSic(sic) {
+  return sic < 0.05 ? 0 : 0.3 + sic * 2.0;
+}
+
+/** 실측/추정 두께(m) → WMO 빙질 단계 (RIV_TABLE 키와 일치). iceDetour.thicknessToIceType 과 동일. */
+function thicknessToIceType(t) {
+  if (t < 0.15) return 'Grey Ice';
+  if (t < 0.30) return 'Grey-White Ice';
+  if (t < 0.70) return 'Thin First-Year (FY)';
+  if (t < 1.20) return 'Medium First-Year (FY)';
+  if (t < 2.00) return 'Thick First-Year (FY)';
+  if (t < 3.00) return 'Multi-Year (MY)';
+  return 'Ridged/Hummocked';
+}
+
+/** 선박을 선분 [a,b] 에 정사영 → { t∈[0,1], distKm }. 날짜변경선 보정 포함. */
+function projectOnSegment(p, a, b) {
+  const bLon = unwrapLon(b.lon, a.lon);
+  const pLon = unwrapLon(p.lon, a.lon);
+  const latRef = (a.lat + b.lat) / 2;
+  const kx = Math.cos(latRef * DEG2RAD);
+  const ax = a.lon * kx, ay = a.lat;
+  const bx = bLon * kx, by = b.lat;
+  const px = pLon * kx, py = p.lat;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const projLat = a.lat + t * (b.lat - a.lat);
+  const projLon = normalizeLon(a.lon + t * (bLon - a.lon));
+  return { t, distKm: haversineKm(p.lat, p.lon, projLat, projLon) };
+}
+
+/** 누적거리 d(km) 지점의 항로 좌표 보간. */
+function pointAtRouteDistance(wp, cum, segLen, d) {
+  let i = 0;
+  while (i < segLen.length - 1 && cum[i + 1] < d) i += 1;
+  const frac = segLen[i] > 0 ? (d - cum[i]) / segLen[i] : 0;
+  const a = wp[i], b = wp[i + 1];
+  const bLon = unwrapLon(b.lon, a.lon);
+  return {
+    lat: a.lat + frac * (b.lat - a.lat),
+    lon: normalizeLon(a.lon + frac * (bLon - a.lon)),
+  };
+}
+
+/** (lat,lon)에서 방위각 bearingDeg(0=북,시계방향)로 distKm 전진한 대권 좌표. 수동 자유항행용. */
+function destPoint(lat, lon, bearingDeg, distKm) {
+  const ang = distKm / EARTH_R_KM;
+  const th = bearingDeg * DEG2RAD;
+  const phi1 = lat * DEG2RAD;
+  const lam1 = lon * DEG2RAD;
+  const sinPhi2 =
+    Math.sin(phi1) * Math.cos(ang) +
+    Math.cos(phi1) * Math.sin(ang) * Math.cos(th);
+  const phi2 = Math.asin(Math.max(-1, Math.min(1, sinPhi2)));
+  const y = Math.sin(th) * Math.sin(ang) * Math.cos(phi1);
+  const x = Math.cos(ang) - Math.sin(phi1) * sinPhi2;
+  const lam2 = lam1 + Math.atan2(y, x);
+  return { lat: phi2 / DEG2RAD, lon: normalizeLon(lam2 / DEG2RAD) };
+}
+
+/**
+ * Live 모드 전방 프리뷰 시퀀스 유도.
+ *
+ * 자동 항행(본선이 활성 항로를 추종, heading=항로 접선) 시에는 항로를 따라
+ * 전방을 샘플링한다(육지 회피·곡선 추종, Voyage trace 와 동일 의미).
+ * 수동 자유항행으로 항로를 크게 벗어나면(off-route) 본선 heading 대권 직선으로
+ * 투영해 "뱃머리 전방"을 그린다. 이탈 거리(offRouteKm)로 자동 전환된다.
+ *
+ * 각 샘플 지점에서 SIC→추정두께→빙질→RIO 를 계산한다. RIO 는 voyage trace 와
+ * 동일한 분수(0~1 농도) 스케일이라 derivePassBadge 임계값과 호환된다.
+ *
+ * @param {Array<{lat:number,lon:number}>} waypoints  활성 항로(activeWaypoints)
+ * @param {{lat:number,lon:number,heading?:number}} shipState  본선 현재 위치/침로
+ * @param {string}   iceClass     선박 빙급('Arc4'..'Arc9','PC*' 등)
+ * @param {Function} sampleIceFn  (lon,lat)=>SIC(0~1)
+ * @param {{spanKm?:number, bars?:number, offRouteKm?:number}} [opts]
+ * @returns {Array<{t,kmAhead,thickness_m,effective_thickness_m,rio,position}>}
+ *   deriveForwardPreview 와 동일 형태 → ForwardPreviewHUD/derivePassBadge 와 호환.
+ */
+export function deriveForwardPreviewLive(waypoints, shipState, iceClass, sampleIceFn, opts = {}) {
+  const spanKm = opts.spanKm ?? 400;
+  const bars = opts.bars ?? 16;
+  const offRouteKm = opts.offRouteKm ?? 25;
+  if (!Array.isArray(waypoints) || waypoints.length < 2) return [];
+  if (!shipState || !Number.isFinite(shipState.lat) || !Number.isFinite(shipState.lon)) return [];
+  if (typeof sampleIceFn !== 'function') return [];
+
+  // 누적 항로 거리
+  const n = waypoints.length;
+  const segLen = new Array(n - 1);
+  const cum = new Array(n);
+  cum[0] = 0;
+  for (let i = 0; i < n - 1; i += 1) {
+    segLen[i] = haversineKm(
+      waypoints[i].lat, waypoints[i].lon,
+      waypoints[i + 1].lat, waypoints[i + 1].lon,
+    );
+    cum[i + 1] = cum[i] + segLen[i];
+  }
+  const totalKm = cum[n - 1];
+  if (totalKm <= 0) return [];
+
+  // 본선을 항로에 정사영 → 전방 시작 거리 + 이탈 거리
+  let bestD = Infinity;
+  let startDist = 0;
+  for (let i = 0; i < n - 1; i += 1) {
+    const proj = projectOnSegment(shipState, waypoints[i], waypoints[i + 1]);
+    if (proj.distKm < bestD) {
+      bestD = proj.distKm;
+      startDist = cum[i] + proj.t * segLen[i];
+    }
+  }
+
+  // 항로에서 크게 벗어났고 heading 이 있으면 heading 직선 투영(수동 자유항행)
+  const heading = typeof shipState.heading === 'number' && Number.isFinite(shipState.heading)
+    ? shipState.heading
+    : null;
+  const useHeadingRay = bestD > offRouteKm && heading !== null;
+
+  // 전방 샘플링
+  const step = spanKm / bars;
+  const out = [];
+  let prevLat = shipState.lat;
+  let prevLon = shipState.lon;
+  let accKm = 0;
+  for (let k = 1; k <= bars; k += 1) {
+    let pos;
+    if (useHeadingRay) {
+      pos = destPoint(shipState.lat, shipState.lon, heading, k * step);
+    } else {
+      const d = startDist + k * step;
+      if (d > totalKm) break; // 항로 종점 도달
+      pos = pointAtRouteDistance(waypoints, cum, segLen, d);
+    }
+    accKm += haversineKm(prevLat, prevLon, pos.lat, pos.lon);
+    const sic = Math.max(0, Math.min(1, sampleIceFn(pos.lon, pos.lat) || 0));
+    const thk = estThicknessFromSic(sic);
+    const open = Math.max(0, 1 - sic);
+    const rio = calculateRIO(iceClass, [
+      { type: thicknessToIceType(thk), concentration_tenths: sic },
+      { type: 'Open Water', concentration_tenths: open },
+    ]);
+    out.push({
+      t: k,
+      kmAhead: accKm,
+      thickness_m: thk,
+      effective_thickness_m: thk,
+      rio,
+      position: pos,
+    });
+    prevLat = pos.lat;
+    prevLon = pos.lon;
+  }
+  return out;
 }
 
 /**

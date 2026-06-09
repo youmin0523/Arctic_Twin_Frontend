@@ -22,14 +22,22 @@ function thicknessColor(m) {
   return '#ef4444';
 }
 
-export default function ForwardPreviewHUD({ visible, trace, tHours }) {
+export default function ForwardPreviewHUD({
+  visible,
+  trace,
+  tHours,
+  preview: previewProp,
+  live = false,
+}) {
+  // previewProp(사전계산, Live 모드) 우선. 없으면 trace 에서 유도(Voyage 모드).
   const preview = useMemo(
-    () => (trace ? deriveForwardPreview(trace, tHours, BAR_COUNT) : []),
-    [trace, tHours],
+    () =>
+      previewProp ?? (trace ? deriveForwardPreview(trace, tHours, BAR_COUNT) : []),
+    [previewProp, trace, tHours],
   );
   const badge = useMemo(() => derivePassBadge(preview), [preview]);
 
-  if (!visible || !trace || preview.length === 0) return null;
+  if (!visible || preview.length === 0) return null;
 
   const maxH = Math.max(
     0.5,
@@ -117,7 +125,10 @@ export default function ForwardPreviewHUD({ visible, trace, tHours }) {
         }}
       >
         <span>두께 최대 {maxH.toFixed(2)}m</span>
-        <span>추정 · {preview.length} tick</span>
+        <span>
+          {live ? '전방 항로 스캔' : '추정'} · {preview.length}
+          {live ? ' 구간' : ' tick'}
+        </span>
       </div>
     </div>
   );

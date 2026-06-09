@@ -6,15 +6,33 @@
 
 import { ICE_CLASS_DATA, RIV_TABLE } from '../data/iceClassData.js';
 
+// IACS Polar Arc 등급(Arc4~Arc9) → POLARIS PC 등가 매핑.
+// RIV_TABLE 은 PC*/IA*/IB/IC/NONE 키만 가지므로, Arc* 빙급은 PC 등가로 환산해야
+// RIV 룩업이 성립한다. (frontend/src/components/layout/BottomPanel.jsx 의
+// iceClassCodeMap 과 동일 근거: Arc9→PC3, Arc7→PC4, Arc6→PC5, Arc5→PC6, Arc4→PC7)
+const ARC_TO_PC = { Arc9: 'PC3', Arc7: 'PC4', Arc6: 'PC5', Arc5: 'PC6', Arc4: 'PC7' };
+
+/**
+ * 빙급 문자열을 RIV_TABLE 룩업 키로 정규화한다.
+ * PC·IA·IB·IC·NONE 키는 그대로, Arc 등급은 PC 등가로, 그 외 미정의 등급은 NONE 으로 폴백.
+ * @param {string} iceClass
+ * @returns {string} RIV_TABLE 에 존재하는 키
+ */
+export function normalizeIceClass(iceClass) {
+  if (iceClass && RIV_TABLE[iceClass]) return iceClass;
+  if (iceClass && ARC_TO_PC[iceClass]) return ARC_TO_PC[iceClass];
+  return 'NONE';
+}
+
 /**
  * Calculate the Risk Index Outcome (RIO) for a given ice class and ice conditions.
  *
- * @param {string} iceClass       - Polar class key (e.g. 'PC1'..'PC7', 'NONE', 'IA Super', etc.)
+ * @param {string} iceClass       - Polar class key (e.g. 'PC1'..'PC7', 'NONE', 'IA Super', 'Arc4'..'Arc9')
  * @param {Array}  iceConditions  - Array of { type: string, concentration_tenths: number }
  * @returns {number} RIO score (positive = safe, negative = dangerous)
  */
 export function calculateRIO(iceClass, iceConditions) {
-  const classRivs = RIV_TABLE[iceClass] || RIV_TABLE['NONE'];
+  const classRivs = RIV_TABLE[normalizeIceClass(iceClass)];
   let rio = 0;
   for (const entry of iceConditions) {
     const riv = classRivs[entry.type];
