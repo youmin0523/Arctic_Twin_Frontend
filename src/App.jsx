@@ -3290,16 +3290,54 @@ function AppInner() {
     }
   } else if (isArcticRoute && !voyageActive) {
     // Live 모드(북극 항로): 독립 아라온 에이전트(useAraonControl)가 호출/복귀로
-    // 자체 운항. 대기(Wrangel)·호위 모두 표시. 비-북극 항로는 위 가드로 제외됨.
-    araonDisplayPos = {
-      lat: liveAraon.lat,
-      lon: liveAraon.lon,
-      status: liveAraon.status,
-      label: liveAraon.label,
-      heading: liveAraon.heading,
-    };
+    // 자체 운항. 비-북극 항로는 위 가드로 제외됨.
+    // idle(대기) 이면 — 활성 항로 자산의 "실재 모항"에 고정한다. liveAraon 상태가
+    // 항로 전환 직후 옛 모항(예: NWP인데 Wrangel)에 머무는 desync 를 차단해
+    // 이름(CCGS)과 위치(Resolute)를 항상 일치시킨다. 실제 이동(호위/전개/복귀)
+    // 중일 때만 Live 에이전트 위치를 따른다.
+    araonDisplayPos =
+      liveAraon.status === 'idle'
+        ? {
+            lat: activeEscortAsset.home.lat,
+            lon: activeEscortAsset.home.lon,
+            status: 'idle',
+            label: `대기 (${activeEscortAsset.homeName})`,
+            heading: 0,
+          }
+        : {
+            lat: liveAraon.lat,
+            lon: liveAraon.lon,
+            status: liveAraon.status,
+            label: liveAraon.label,
+            heading: liveAraon.heading,
+          };
   }
   // 표시 안 함 → araonDisplayPos=null → AraonLiveMarker 가 entity 미생성/제거
+
+  // ── 북극 함대 — 비활성 항로 쇄빙선도 각자 모항에 정박 표시 ──────────────
+  // 각 항로의 호위 자산(아라온@Wrangel / CCGS@Resolute / 원자력@Longyearbyen)이
+  // 항상 자기 이름표를 달고 제 모항에 떠 있는 그림(프로세스 일관성). 활성 항로
+  // 쇄빙선은 별도로 그려지므로(Live=araonDisplayPos / Voyage=trace) 중복 제외한다.
+  //   · Live  : araonDisplayPos(호출 시 본선 호위)
+  //   · Voyage: VoyagePlaybackLayer(voyage-ib-*, trace 1척)
+  const ARCTIC_ESCORTS = [
+    ESCORT_ASSETS.NSR,
+    ESCORT_ASSETS.NWP,
+    ESCORT_ASSETS.TSR,
+  ];
+  const idleEscortFleet =
+    isArcticRoute && (voyageActive || appMode === 'live')
+      ? ARCTIC_ESCORTS.filter((a) => a.id !== activeEscortAsset?.id).map((a) => ({
+          asset: a,
+          displayPos: {
+            lat: a.home.lat,
+            lon: a.home.lon,
+            status: 'idle',
+            label: `대기 (${a.homeName})`,
+            heading: 0,
+          },
+        }))
+      : [];
 
   // "쇄빙선 위치로 이동" — 현재 쇄빙선 위치로 카메라 비행(FOLLOW면 위성 조감 전환).
   const handleFlyToEscort = () => {
@@ -3478,6 +3516,16 @@ function AppInner() {
             displayPos={araonDisplayPos}
             asset={activeEscortAsset}
           />
+          {/* 비활성 항로 쇄빙선 — 각자 모항에 정박(자기 이름표). */}
+          {idleEscortFleet.map(({ asset, displayPos }) => (
+            <AraonLiveMarker
+              key={asset.id}
+              cesiumRef={cesiumRef}
+              visible
+              displayPos={displayPos}
+              asset={asset}
+            />
+          ))}
           {voyageActive && (
             <>
               <VoyagePlaybackLayer
