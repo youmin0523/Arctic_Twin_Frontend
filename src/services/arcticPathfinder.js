@@ -9,6 +9,12 @@
  * - 결과를 대권항로(Geodesic) 웨이포인트 배열로 반환
  */
 
+import {
+  isGlobalLandMaskReady,
+  isLandGlobal,
+  inNavigableCorridor,
+} from './landMaskGlobal';
+
 // ─── 육지 마스크 ──────────────────────────────────────────────────────────────
 
 let landMask = null;
@@ -71,11 +77,30 @@ export function landAhead(lat, lon, heading, lookAheadKm = 80, stepKm = 8) {
 const GRID_LON_STEP = 0.5;
 const GRID_LAT_STEP = 0.5;
 const GRID_LON_MIN = -180;
-const GRID_LAT_MIN = 65;   // 북극권 시작 위도
 const GRID_LON_MAX = 180;
-const GRID_LAT_MAX = 90;
 const GRID_COLS = (GRID_LON_MAX - GRID_LON_MIN) / GRID_LON_STEP; // 720
-const GRID_ROWS = (GRID_LAT_MAX - GRID_LAT_MIN) / GRID_LAT_STEP; // 50
+
+// ─── 반구별 격자 위도창 ──────────────────────────────────────────────────────
+// A* 격자는 극권만 다룬다. 북극(NSR/NWP/TSR)은 65~90°N, 남극(ROSS/PENINSULA,
+// 아라온 양극 운항)은 −80~−50°S. 출발 위도 부호로 반구를 판정해 cfg 를 만든다.
+// 육지/빙/빙산 셀 인덱싱은 모두 cfg.latMin 기준이라 한 곳만 바꾸면 양극 동작.
+function makeGridCfg(hemisphere) {
+  const south = hemisphere === 'south';
+  const latMin = south ? -80 : 65;
+  const latMax = south ? -50 : 90;
+  return {
+    hemi: south ? 'south' : 'north',
+    latMin,
+    latMax,
+    rows: Math.round((latMax - latMin) / GRID_LAT_STEP),
+  };
+}
+// 기본(북극) cfg — 레거시 export(isLandAt/landAhead/isPathAheadBlocked) 호환용.
+const NORTH_CFG = makeGridCfg('north');
+// 하위호환 상수(레거시 함수 가드에서 사용) — 북극 기준 유지.
+const GRID_LAT_MIN = NORTH_CFG.latMin; // 65
+const GRID_LAT_MAX = NORTH_CFG.latMax; // 90
+const GRID_ROWS = NORTH_CFG.rows;      // 50
 
 // 8방향 이동 (상하좌우 + 대각선)
 const DIRS = [
@@ -86,19 +111,19 @@ const DIRS = [
 
 // ─── 좌표 변환 헬퍼 ──────────────────────────────────────────────────────────
 
-function lonLatToCell(lon, lat) {
+function lonLatToCell(lon, lat, cfg = NORTH_CFG) {
   const col = Math.floor((lon - GRID_LON_MIN) / GRID_LON_STEP);
-  const row = Math.floor((lat - GRID_LAT_MIN) / GRID_LAT_STEP);
+  const row = Math.floor((lat - cfg.latMin) / GRID_LAT_STEP);
   return [
     Math.max(0, Math.min(GRID_COLS - 1, col)),
-    Math.max(0, Math.min(GRID_ROWS - 1, row)),
+    Math.max(0, Math.min(cfg.rows - 1, row)),
   ];
 }
 
-function cellToLonLat(col, row) {
+function cellToLonLat(col, row, cfg = NORTH_CFG) {
   return [
     GRID_LON_MIN + col * GRID_LON_STEP + GRID_LON_STEP / 2,
-    GRID_LAT_MIN + row * GRID_LAT_STEP + GRID_LAT_STEP / 2,
+    cfg.latMin + row * GRID_LAT_STEP + GRID_LAT_STEP / 2,
   ];
 }
 
@@ -112,16 +137,19 @@ function cellToLonLat(col, row) {
  * @param {Array} icebergs - [{ lat, lon, length_m }] 빙산 위치 배열 (선택)
  * @param {number} safetyRadiusDeg - 빙산 주변 안전 반경 (도 단위, 기본 0.15 ≈ 약 16km)
  */
-function buildGrid(dataset, icebergs = [], safetyRadiusDeg = 0.15) {
-  const grid = new Float32Array(GRID_ROWS * GRID_COLS).fill(0);
+function buildGrid(dataset, icebergs = [], safetyRadiusDeg = 0.15, cfg = NORTH_CFG) {
+  const grid = new Float32Array(cfg.rows * GRID_COLS).fill(0);
+  // 일부 데이터 소스(NSIDC/Copernicus 셀)는 lon/latStep 이 없다 → 1셀(격자분해능)로 간주.
+  const dLon = (s) => (Number.isFinite(s) ? s : GRID_LON_STEP);
+  const dLat = (s) => (Number.isFinite(s) ? s : GRID_LAT_STEP);
 
   // 1) 빙하 농도 채우기
   if (dataset && dataset.cells) {
     for (const cell of dataset.cells) {
       const colStart = Math.max(0, Math.floor((cell.lon - GRID_LON_MIN) / GRID_LON_STEP));
-      const colEnd   = Math.min(GRID_COLS, Math.ceil((cell.lon + cell.lonStep - GRID_LON_MIN) / GRID_LON_STEP));
-      const rowStart = Math.max(0, Math.floor((cell.lat - GRID_LAT_MIN) / GRID_LAT_STEP));
-      const rowEnd   = Math.min(GRID_ROWS, Math.ceil((cell.lat + cell.latStep - GRID_LAT_MIN) / GRID_LAT_STEP));
+      const colEnd   = Math.min(GRID_COLS, Math.ceil((cell.lon + dLon(cell.lonStep) - GRID_LON_MIN) / GRID_LON_STEP));
+      const rowStart = Math.max(0, Math.floor((cell.lat - cfg.latMin) / GRID_LAT_STEP));
+      const rowEnd   = Math.min(cfg.rows, Math.ceil((cell.lat + dLat(cell.latStep) - cfg.latMin) / GRID_LAT_STEP));
 
       for (let r = rowStart; r < rowEnd; r++) {
         for (let c = colStart; c < colEnd; c++) {
@@ -132,25 +160,38 @@ function buildGrid(dataset, icebergs = [], safetyRadiusDeg = 0.15) {
   }
 
   // 2) 육지 마스크 적용: 육지 셀을 999로 표시 (항상 통과 불가)
-  if (landMask) {
-    for (let i = 0; i < GRID_ROWS * GRID_COLS; i++) {
+  //   북극: 기존 Arctic landMask.json(720×50). 남극: 별도 마스크가 없으므로
+  //   전역 0.05° 마스크(landMaskGlobal, 통항회랑 면제)로 셀별 판정.
+  if (cfg.hemi === 'south') {
+    if (isGlobalLandMaskReady()) {
+      for (let r = 0; r < cfg.rows; r++) {
+        for (let c = 0; c < GRID_COLS; c++) {
+          const [clon, clat] = cellToLonLat(c, r, cfg);
+          if (isLandGlobal(clat, clon) && !inNavigableCorridor(clat, clon)) {
+            grid[r * GRID_COLS + c] = 999;
+          }
+        }
+      }
+    }
+  } else if (landMask) {
+    for (let i = 0; i < cfg.rows * GRID_COLS; i++) {
       if (landMask[i] === 1) grid[i] = 999;
     }
   }
 
   // 3) 빙산 장애물 주입: 빙산 주변 셀을 높은 비용으로 마킹
   for (const berg of icebergs) {
-    if (berg.lat < GRID_LAT_MIN || berg.lat >= GRID_LAT_MAX) continue;
+    if (berg.lat < cfg.latMin || berg.lat >= cfg.latMax) continue;
     const radius = Math.max(safetyRadiusDeg, (berg.length_m || 5000) / 111000 * 2);
     const cCenter = Math.floor((berg.lon - GRID_LON_MIN) / GRID_LON_STEP);
-    const rCenter = Math.floor((berg.lat - GRID_LAT_MIN) / GRID_LAT_STEP);
+    const rCenter = Math.floor((berg.lat - cfg.latMin) / GRID_LAT_STEP);
     const cellRadius = Math.ceil(radius / GRID_LAT_STEP);
 
     for (let dr = -cellRadius; dr <= cellRadius; dr++) {
       for (let dc = -cellRadius; dc <= cellRadius; dc++) {
         const r = rCenter + dr;
         const c = (cCenter + dc + GRID_COLS) % GRID_COLS; // 경도 래핑
-        if (r < 0 || r >= GRID_ROWS) continue;
+        if (r < 0 || r >= cfg.rows) continue;
         const dist = Math.sqrt(dr * dr + dc * dc);
         if (dist <= cellRadius) {
           const idx = r * GRID_COLS + c;
@@ -170,10 +211,10 @@ function buildGrid(dataset, icebergs = [], safetyRadiusDeg = 0.15) {
 /**
  * 목표 지점이 육지인 경우 BFS로 가장 가까운 해수 셀을 찾아 스냅.
  */
-function snapToOcean(col, row, grid) {
+function snapToOcean(col, row, grid, cfg = NORTH_CFG) {
   if (grid[row * GRID_COLS + col] < 999) return [col, row];
 
-  const visited = new Uint8Array(GRID_ROWS * GRID_COLS);
+  const visited = new Uint8Array(cfg.rows * GRID_COLS);
   const queue = [[col, row]];
   visited[row * GRID_COLS + col] = 1;
 
@@ -182,7 +223,7 @@ function snapToOcean(col, row, grid) {
     for (const [dc, dr] of DIRS) {
       const nc = c + dc;
       const nr = r + dr;
-      if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+      if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= cfg.rows) continue;
       const ni = nr * GRID_COLS + nc;
       if (visited[ni]) continue;
       visited[ni] = 1;
@@ -278,7 +319,7 @@ class MinHeap {
 
 // ─── 경로 복원 + 단순화 ──────────────────────────────────────────────────────
 
-function reconstructPath(cameFrom, endIdx) {
+function reconstructPath(cameFrom, endIdx, cfg = NORTH_CFG) {
   const rawPath = [];
   let current = endIdx;
   while (current !== -1) {
@@ -290,7 +331,7 @@ function reconstructPath(cameFrom, endIdx) {
   const waypoints = rawPath.map((idx) => {
     const col = idx % GRID_COLS;
     const row = Math.floor(idx / GRID_COLS);
-    return cellToLonLat(col, row);
+    return cellToLonLat(col, row, cfg);
   });
 
   return simplifyPath(waypoints, 12); // 방향 변화 12° 이상만 웨이포인트 유지
@@ -347,23 +388,26 @@ export function findArcticPath(
   icebergs = [],
   weatherSampler = null
 ) {
-  const clampedStartLat = Math.max(GRID_LAT_MIN, Math.min(GRID_LAT_MAX - 0.01, startLat));
-  const clampedGoalLat  = Math.max(GRID_LAT_MIN, Math.min(GRID_LAT_MAX - 0.01, goalLat));
+  // 반구 판정: 출발/도착 평균 위도 부호. 남극(<0) 이면 −80~−50 격자 사용.
+  const cfg = makeGridCfg((startLat + goalLat) / 2 < 0 ? 'south' : 'north');
 
-  const grid = buildGrid(dataset, icebergs);
-  let [startCol, startRow] = lonLatToCell(startLon, clampedStartLat);
-  let [goalCol, goalRow]   = lonLatToCell(goalLon,  clampedGoalLat);
+  const clampedStartLat = Math.max(cfg.latMin, Math.min(cfg.latMax - 0.01, startLat));
+  const clampedGoalLat  = Math.max(cfg.latMin, Math.min(cfg.latMax - 0.01, goalLat));
+
+  const grid = buildGrid(dataset, icebergs, 0.15, cfg);
+  let [startCol, startRow] = lonLatToCell(startLon, clampedStartLat, cfg);
+  let [goalCol, goalRow]   = lonLatToCell(goalLon,  clampedGoalLat, cfg);
 
   // 출발/도착 지점이 육지에 있으면 가장 가까운 해수 셀로 스냅
-  [startCol, startRow] = snapToOcean(startCol, startRow, grid);
-  [goalCol, goalRow]   = snapToOcean(goalCol, goalRow, grid);
+  [startCol, startRow] = snapToOcean(startCol, startRow, grid, cfg);
+  [goalCol, goalRow]   = snapToOcean(goalCol, goalRow, grid, cfg);
 
   // 이미 같은 셀이면 빈 경로 반환
   if (startCol === goalCol && startRow === goalRow) {
     return [[goalLon, goalLat]];
   }
 
-  const size = GRID_ROWS * GRID_COLS;
+  const size = cfg.rows * GRID_COLS;
   const gScore   = new Float32Array(size).fill(Infinity);
   const cameFrom = new Int32Array(size).fill(-1);
 
@@ -388,7 +432,7 @@ export function findArcticPath(
     closed[currentIdx] = 1;
 
     if (currentIdx === goalIdx) {
-      return reconstructPath(cameFrom, currentIdx);
+      return reconstructPath(cameFrom, currentIdx, cfg);
     }
 
     const currentCol = currentIdx % GRID_COLS;
@@ -402,7 +446,7 @@ export function findArcticPath(
       // 기상 샘플러가 있으면 이웃 셀 중심 좌표의 기상 페널티를 비용에 반영
       let weatherPen = 0;
       if (weatherSampler) {
-        const [clon, clat] = cellToLonLat(nc, nr);
+        const [clon, clat] = cellToLonLat(nc, nr, cfg);
         const p = weatherSampler(clon, clat);
         if (Number.isFinite(p)) weatherPen = p;
       }
