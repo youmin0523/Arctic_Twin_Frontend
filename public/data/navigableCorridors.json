@@ -30,6 +30,27 @@
       "points": [
         [43.40, 12.60], [43.00, 13.05]
       ]
+    },
+    {
+      "name": "Strait of Magellan (East / Punta Arenas)",
+      "bufferKm": 14,
+      "points": [
+        [-70.92, -53.16], [-70.20, -52.95], [-69.30, -52.70], [-68.30, -52.50]
+      ]
+    },
+    {
+      "name": "Terra Nova Bay Approach (Jang Bogo Stn)",
+      "bufferKm": 15,
+      "points": [
+        [166.50, -74.00], [165.20, -74.40], [164.23, -74.62]
+      ]
+    },
+    {
+      "name": "King George Is. Approach (King Sejong Stn)",
+      "bufferKm": 12,
+      "points": [
+        [-59.20, -62.00], [-58.78, -62.22]
+      ]
     }
   ]
 }

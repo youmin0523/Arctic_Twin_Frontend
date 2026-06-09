@@ -21,7 +21,7 @@ function extract(key) {
 let totalBad = 0;
 // NSR/NWP/TSR(북극 3항로)도 포함 — 과거 누락으로 베링/추코트카·캐나다 제도 육지관통이
 // 검출되지 않았다. 항만 끝점/통항회랑 면제는 auditRoute 가 처리.
-for (const k of ['NSR', 'NWP', 'TSR', 'SUEZ', 'CAPE']) {
+for (const k of ['NSR', 'NWP', 'TSR', 'SUEZ', 'CAPE', 'ROSS', 'PENINSULA']) {
   const r = auditRoute(k + ' (실데이터)', extract(k));
   totalBad += r.bad + r.wpLand;
 }

@@ -184,6 +184,25 @@ async function generateRouteRaw(
     return buildDirectRoute(depPort, arrPort);
   }
 
+  // 0.5. 남극 항로(ROSS/PENINSULA) — 관문항↔기지 고정 경로.
+  //   북극항로의 부산→로테르담 회랑 스플라이스 모델(아시아↔유럽)에 맞지 않으므로,
+  //   검증된 베이스 경로를 그대로 쓰되 출발항이 기지(끝점)에 가까우면 역방향으로
+  //   재생한다. 양 끝점은 실제 포트 좌표로 스냅. 해빙 우회는 북극과 동일하게 적용.
+  if (routeType === 'ROSS' || routeType === 'PENINSULA') {
+    const base = ROUTES[routeType];
+    const sq = (a, b) => (a.lat - b.lat) ** 2 + (a.lon - b.lon) ** 2;
+    const head = base[0];
+    const tail = base[base.length - 1];
+    const reversed = sq(depPort, tail) < sq(depPort, head);
+    let r = (reversed ? reverseRoute(base) : base.slice()).map((wp) => ({ ...wp }));
+    r[0] = { lon: depPort.lon, lat: depPort.lat, label: depPort.name };
+    r[r.length - 1] = { lon: arrPort.lon, lat: arrPort.lat, label: arrPort.name };
+    if (iceData) {
+      r = await applyIceDetours(r, iceData, iceClass);
+    }
+    return r;
+  }
+
   const baseRoute = ROUTES[routeType] || ROUTES.NSR;
   const corridor  = ROUTE_CORRIDOR[routeType] || ROUTE_CORRIDOR.NSR;
   const n = baseRoute.length;
