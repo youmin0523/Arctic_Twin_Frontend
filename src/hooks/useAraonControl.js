@@ -64,6 +64,35 @@ export const ESCORT_ASSETS = {
       helideck: true, crane: false, stripe: null, reactor: true,
     },
   },
+
+  // ── 남극(양극 운항) 호위 자산 — 아라온이 남반구 여름에 양극 운항 ──────────
+  // 한국 보유 극지선은 아라온 1척뿐이라, 북극(NSR)·남극(ROSS/PENINSULA)을 계절별로
+  // 오가며 운항한다(양극 운항, bipolar). 남극 항로에서도 동일 아라온이 호위/쇄빙하되,
+  // 사전배치 거점만 각 항로가 통과하는 해빙역 입구로 둔다.
+  //   ROSS      → 로스해 해빙역 입구(빅토리아랜드 외해) 사전배치
+  //   PENINSULA → 사우스셰틀랜드 북방 해빙역 입구 사전배치
+  ROSS: {
+    id: 'araon-ross', name: '아라온', org: 'KOPRI', flag: '🇰🇷',
+    home: { lat: -72.0, lon: 168.5 }, homeName: '빅토리아랜드 외해 (남극 전진)',
+    speedKn: 16, reachKm: 400,
+    hullColor: '#c0392b',
+    visual: {
+      hull: 0xc0392b, deck: 0x6b1e17, sup: 0xecf0f1, window: 0x1a365d,
+      accent: 0xe67e22, gray: 0x4a5568, funnelBand: 0xc0392b,
+      helideck: true, crane: true, stripe: null, reactor: false,
+    },
+  },
+  PENINSULA: {
+    id: 'araon-pen', name: '아라온', org: 'KOPRI', flag: '🇰🇷',
+    home: { lat: -61.4, lon: -60.2 }, homeName: '사우스셰틀랜드 북방 (남극 전진)',
+    speedKn: 16, reachKm: 400,
+    hullColor: '#c0392b',
+    visual: {
+      hull: 0xc0392b, deck: 0x6b1e17, sup: 0xecf0f1, window: 0x1a365d,
+      accent: 0xe67e22, gray: 0x4a5568, funnelBand: 0xc0392b,
+      helideck: true, crane: true, stripe: null, reactor: false,
+    },
+  },
 };
 
 // 하위호환: 기존 ARAON_HOME 참조는 NSR(아라온) 거점으로 유지
@@ -75,6 +104,8 @@ export const ESCORT_ASSET_BY_IB_ID = {
   'ib-araon': ESCORT_ASSETS.NSR,
   'ib-ccgs': ESCORT_ASSETS.NWP,
   'ib-rosatom': ESCORT_ASSETS.TSR,
+  'ib-araon-ross': ESCORT_ASSETS.ROSS,
+  'ib-araon-pen': ESCORT_ASSETS.PENINSULA,
 };
 
 const KN_TO_KMH = 1.852;
