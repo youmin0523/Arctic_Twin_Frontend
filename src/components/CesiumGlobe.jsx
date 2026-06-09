@@ -25,6 +25,8 @@ const ROUTE_COLORS = {
   TSR: '#a855f7',
   SUEZ: '#facc15',
   CAPE: '#fb923c',
+  ROSS: '#38bdf8',
+  PENINSULA: '#2dd4bf',
   ETC: '#9ca3af',
 };
 

@@ -8,6 +8,8 @@ const ROUTE_META = [
   { key: 'TSR', label: 'TSR', color: '#a855f7', dist: '6,900km' },
   { key: 'SUEZ', label: 'SUEZ', color: '#facc15', dist: '11,200km' },
   { key: 'CAPE', label: 'CAPE', color: '#fb923c', dist: '14,500km' },
+  { key: 'ROSS', label: 'ROSS (남극)', color: '#38bdf8', dist: '3,900km' },
+  { key: 'PENINSULA', label: 'PENINSULA (남극)', color: '#2dd4bf', dist: '2,100km' },
   { key: 'ETC', label: 'ETC', color: '#9ca3af', dist: '0km' },
 ];
 

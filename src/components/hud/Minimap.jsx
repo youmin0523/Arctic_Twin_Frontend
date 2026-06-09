@@ -54,17 +54,33 @@ export default function Minimap({
     const lon = shipPos?.lon ?? 0;
     const wps = waypoints || [];
 
-    // LAT_MIN을 웨이포인트 최소 위도 기준으로 동적 계산 (15° 단위 내림, 5° 여유)
-    const minWpLat = wps.length ? Math.min(...wps.map((w) => w.lat)) : 30;
-    const LAT_MIN = Math.floor((minWpLat - 5) / 15) * 15;
-    const LAT_MAX = 90;
-    const latRange = LAT_MAX - LAT_MIN;
+    // 반구 판정: 웨이포인트(없으면 본선) 평균 위도로 북/남극 투영 선택.
+    // 남극 항로(ROSS/PENINSULA)는 남극점(-90°)을 중심으로 한 입체투영으로 그린다.
+    const latSamples = wps.length ? wps.map((w) => w.lat) : [lat];
+    const meanLat = latSamples.reduce((a, b) => a + b, 0) / latSamples.length;
+    const south = meanLat < 0;
 
-    // 극좌표 변환: 북극(90°N)이 항상 중심
+    // pole=중심 위도, outer=바깥 경계 위도. r 은 |pole-la|/latRange 로 일관 계산.
+    const pole = south ? -90 : 90;
+    let outer;
+    if (south) {
+      const maxWpLat = Math.max(...latSamples);
+      outer = Math.min(0, Math.ceil((maxWpLat + 5) / 15) * 15); // 적도 방향 경계(≤0)
+    } else {
+      const minWpLat = Math.min(...latSamples);
+      outer = Math.floor((minWpLat - 5) / 15) * 15;
+    }
+    const LAT_MIN = south ? pole : outer; // 격자 라벨/범위 계산 호환용
+    const LAT_MAX = south ? outer : pole;
+    const latRange = Math.max(1, Math.abs(outer - pole));
+
+    // 극좌표 변환: 극점이 중심. 남극은 자오선 방향을 상하 반전해 표시.
     function latLonToMM(la, lo) {
-      const r = ((LAT_MAX - la) / latRange) * R;
+      const r = (Math.abs(pole - la) / latRange) * R;
       const theta = (lo * Math.PI) / 180;
-      return { x: cx + r * Math.sin(theta), y: cy - r * Math.cos(theta) };
+      const x = cx + r * Math.sin(theta);
+      const y = south ? cy + r * Math.cos(theta) : cy - r * Math.cos(theta);
+      return { x, y };
     }
 
     // background
@@ -75,25 +91,29 @@ export default function Minimap({
     const step = latRange <= 75 ? 15 : 30;
     const gridStart = Math.ceil(LAT_MIN / step) * step;
     for (let la = gridStart; la < LAT_MAX; la += step) {
-      const r = ((LAT_MAX - la) / latRange) * R;
+      const r = (Math.abs(pole - la) / latRange) * R;
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.strokeStyle = la === 60 ? '#1a3060' : (la === 0 ? '#1a3060' : '#0d1f40');
-      ctx.lineWidth = (la === 60 || la === 0) ? 1 : 0.5;
+      // \uadf9\uc804\uc120(\u00b160\u00b0)\u00b7\uc801\ub3c4(0\u00b0) \uac15\uc870
+      const isFront = la === 60 || la === -60 || la === 0;
+      ctx.strokeStyle = isFront ? '#1a3060' : '#0d1f40';
+      ctx.lineWidth = isFront ? 1 : 0.5;
       ctx.stroke();
       ctx.fillStyle = '#1e3a8a';
       ctx.font = '7px Courier New';
       ctx.textAlign = 'left';
-      const label = la >= 0 ? la + '\u00b0' : la + '\u00b0';
-      ctx.fillText(label, cx + 2, cy - r + 8);
+      ctx.fillText(la + '\u00b0', cx + 2, cy - r + 8);
     }
 
-    // 경선 (60° 간격)
+    // 경선 (60° 간격) — 남극은 자오선 상하 반전(latLonToMM 과 동일 규칙)
     [-120, -60, 0, 60, 120, 180].forEach((lo) => {
       const theta = (lo * Math.PI) / 180;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
-      ctx.lineTo(cx + R * Math.sin(theta), cy - R * Math.cos(theta));
+      ctx.lineTo(
+        cx + R * Math.sin(theta),
+        south ? cy + R * Math.cos(theta) : cy - R * Math.cos(theta),
+      );
       ctx.strokeStyle = '#0d1f40';
       ctx.lineWidth = 0.5;
       ctx.stroke();
@@ -106,11 +126,11 @@ export default function Minimap({
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // 북극 라벨
+    // 극점 라벨 (북극 N / 남극 S)
     ctx.fillStyle = '#334466';
     ctx.font = '8px Courier New';
     ctx.textAlign = 'center';
-    ctx.fillText('N', cx, cy + 3);
+    ctx.fillText(south ? 'S' : 'N', cx, cy + 3);
 
     // 경로선 (전체 웨이포인트, 클리핑 없음)
     ctx.beginPath();
@@ -158,7 +178,8 @@ export default function Minimap({
       const hd = heading ?? 0;
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + Math.sin(hd) * 11, p.y - Math.cos(hd) * 11);
+      // 남극 투영은 자오선이 상하 반전이라 방위 벡터의 종축도 반전
+      ctx.lineTo(p.x + Math.sin(hd) * 11, p.y + (south ? 1 : -1) * Math.cos(hd) * 11);
       ctx.strokeStyle = '#ef4444';
       ctx.lineWidth = 1.5;
       ctx.stroke();
@@ -166,7 +187,7 @@ export default function Minimap({
       ctx.fillStyle = '#1e3a8a';
       ctx.font = '8px Courier New';
       ctx.textAlign = 'center';
-      ctx.fillText('\u25bc ' + lat.toFixed(1) + '\u00b0N', cx, H - 6);
+      ctx.fillText('\u25bc ' + Math.abs(lat).toFixed(1) + '\u00b0' + (lat < 0 ? 'S' : 'N'), cx, H - 6);
     }
 
     // 🚢 아라온 마커 — 평소 노랑, 호위 중엔 주황
@@ -240,8 +261,8 @@ export default function Minimap({
           fontFamily: 'tabular-nums',
         }}
       >
-        <span id="mm-lat">{lat.toFixed(4)}°N</span>
-        <span id="mm-lon">{lon.toFixed(4)}°E</span>
+        <span id="mm-lat">{Math.abs(lat).toFixed(4)}°{lat < 0 ? 'S' : 'N'}</span>
+        <span id="mm-lon">{Math.abs(lon).toFixed(4)}°{lon < 0 ? 'W' : 'E'}</span>
         <span id="mm-pct" style={{ color: '#34d399', fontWeight: 'bold' }}>
           {pct}%
         </span>
