@@ -103,6 +103,7 @@ import {
   deriveSpeedKn as deriveVoySpeedKn,
   deriveHeadingDeg as deriveVoyHeadingDeg,
   nearestWaveAt,
+  deriveForwardPreviewLive,
 } from './services/derivedMetrics';
 import './components/VoyagePlayback/voyagePlayback.css';
 
@@ -953,7 +954,9 @@ function AppInner() {
     araon: liveAraon,
     callAraon,
     recallAraon,
+    resetAraon,
     getMode: getAraonMode,
+    getReadiness: getAraonReadiness,
   } = useAraonControl({
     getShipProgress: useCallback(() => simProgressRef.current, []),
     getRoute: useCallback(
@@ -971,6 +974,10 @@ function AppInner() {
   useEffect(() => {
     escortActiveRef.current = liveAraon.status === 'escorting';
   }, [liveAraon.status]);
+
+  // 이번 항해에 호위가 필요한지 — 출항 게이트(handleStart)에서 참조.
+  // escortRequired 는 선언 순서상 뒤(컴포넌트 하단)라 ref 로 동기화해 안전 참조.
+  const escortRequiredRef = useRef(false);
 
   // ── 항구/경로 변경 시 동적 경로 생성 ──────────────────────────
   useEffect(() => {
@@ -1036,6 +1043,64 @@ function AppInner() {
       cancelled = true;
     };
   }, [state.departurePort, state.arrivalPort, state.currentRouteKey, state.shipSpecs?.iceClass]);
+
+  // ── 출발/도착 항구 변경 시 시뮬레이션 초기화 ──────────────────────
+  // 항구를 바꾸면(예: 부산→로테르담 완주 후 로테르담→부산) 진행도·경과시간을
+  // 0으로 되돌리고 본선을 "새 출발항"으로 즉시 이동한다. 호위 쇄빙선도 모항
+  // 대기(idle)로 리셋. 기존엔 항구 드롭다운이 SET_*_PORT 만 dispatch 해
+  // simProgress(=완주 시 1)·shipState 가 그대로 남아 → 본선이 옛 도착지에
+  // 머물고(새로고침해야 정상), 쇄빙선이 옛 진행률로 역주행하던 문제 수정.
+  // (사이드바 ROUTES 클릭은 handleRouteSelect 가 이미 동일 초기화 수행)
+  const portsResetMountRef = useRef(false);
+  useEffect(() => {
+    // 최초 마운트(기본 부산→로테르담)에선 초기 상태 그대로 — 불필요 리셋 방지
+    if (!portsResetMountRef.current) {
+      portsResetMountRef.current = true;
+      return;
+    }
+
+    // 진행 중 시뮬 정지 + 진행도/경과시간 리셋
+    dispatch({ type: 'SET_SIMULATING', payload: false });
+    dispatch({ type: 'SET_PROGRESS', payload: 0 });
+    dispatch({ type: 'SET_ELAPSED', payload: 0 });
+    simElapsedRef.current = 0;
+    simProgressRef.current = 0;
+
+    // 본선을 새 출발항으로 즉시 이동 (출발항→도착항 직선 방향으로 초기 heading)
+    const depPort = PORTS[state.departurePort] || PORTS.BUSAN;
+    const arrPort = PORTS[state.arrivalPort] || PORTS.ROTTERDAM;
+    let initHdgDeg = 0;
+    if (depPort && arrPort) {
+      const φ1 = (depPort.lat * Math.PI) / 180;
+      const φ2 = (arrPort.lat * Math.PI) / 180;
+      const Δλ = ((arrPort.lon - depPort.lon) * Math.PI) / 180;
+      const y = Math.sin(Δλ) * Math.cos(φ2);
+      const x =
+        Math.cos(φ1) * Math.sin(φ2) -
+        Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+      initHdgDeg = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+    }
+
+    dispatch({
+      type: 'SET_SHIP_STATE',
+      payload: { lat: depPort.lat, lon: depPort.lon, heading: initHdgDeg },
+    });
+    if (cesiumRef.current?.updateShipEntity) {
+      cesiumRef.current.updateShipEntity(
+        { lat: depPort.lat, lon: depPort.lon },
+        initHdgDeg,
+        shipSpecsRef.current,
+      );
+    }
+    if (threeRef.current?.shipPivot) {
+      threeRef.current.shipPivot.position.x = 0;
+      threeRef.current.shipPivot.position.z = 0;
+      threeRef.current.shipPivot.rotation.y = -(initHdgDeg * Math.PI) / 180;
+    }
+
+    // 호위 쇄빙선도 모항 대기로 리셋 (옛 진행률 역주행 방지)
+    resetAraon();
+  }, [state.departurePort, state.arrivalPort, dispatch, resetAraon]);
 
   // ── 육지 마스크 사전 로드 (육지 회피/경고용) ──────────────────
   useEffect(() => {
@@ -1749,6 +1814,19 @@ function AppInner() {
   // 시뮬레이션 제어
   const handleStart = useCallback(() => {
     if (!state.isSimulating) {
+      // ── 출항 게이트 ──────────────────────────────────────────────
+      // 호위가 필요한 항해(북극·RESTRICTED)인데 쇄빙선이 본선보다 먼저
+      // 결빙수역 입구에 도달할 수 없으면(물리적 적시 배치 불가) 출항 차단.
+      // 평상시(여유 4~11일)엔 통과 — 상태표시(HUD 라벨)만 동작.
+      if (escortRequiredRef.current) {
+        const r = getAraonReadiness();
+        if (r && r.homeReachable && !r.feasible) {
+          showToast(
+            '쇄빙선이 제때 호위 위치에 도달할 수 없어 출항을 차단합니다 — 호위 준비 후 재시도하세요',
+          );
+          return;
+        }
+      }
       // 자동 항해 시작 시 호위 쇄빙선 검증 오버라이드 해제 → 항로 기준 실제 호위로 복귀
       setEscortOverrideId(null);
       // 시작 시 simElapsed를 현재 progress 기반으로 복원
@@ -1761,7 +1839,14 @@ function AppInner() {
       dispatch({ type: 'SET_ELAPSED', payload: simElapsedRef.current });
     }
     dispatch({ type: 'SET_SIMULATING', payload: !state.isSimulating });
-  }, [state.isSimulating, state.simProgress, state.currentRouteKey, dispatch]);
+  }, [
+    state.isSimulating,
+    state.simProgress,
+    state.currentRouteKey,
+    dispatch,
+    getAraonReadiness,
+    showToast,
+  ]);
 
   const handleReset = useCallback(() => {
     simElapsedRef.current = 0;
@@ -2184,29 +2269,33 @@ function AppInner() {
           bergCesiumEntitiesRef.current = [];
 
           let bergList = [];
-          if (isLive) {
-            try {
-              const bergData = await fetchIcebergs();
-              // 업데이트 시간 저장 (클릭 팝업에서 사용)
-              if (bergData?.updated_at && viewer) {
-                viewer._bergUpdatedAt = bergData.updated_at;
-              }
-              bergList = (bergData?.bergs || [])
-                .filter((b) => b.lat >= 0) // 북반구만
-                .map((b) => ({
-                  id: b.id,
-                  lon: b.lon,
-                  lat: b.lat,
-                  source: b.source || '',
-                  period: b.period || '',
-                  length_m: b.length_m || 5000,
-                  width_m: b.width_m || 2000,
-                }));
-            } catch (e) {
-              console.warn('[BergData] fetch 실패:', e.message);
+          // ── 실측 빙산 로드 (Live·Archive 동일 기준: NIC/IIP 실측) ──
+          //   Live: 최신 스냅샷 / Archive: 해당 날짜 아카이브(없으면 백엔드가 latest 폴백).
+          //   ※ 과거엔 아카이브 모드에서 해빙 "농도" 셀(≥0.8)을 빙산으로 둔갑시켜
+          //     북극 전역에 노란 점이 폭증했음 → 실측 빙산으로 통일해 버그 제거.
+          try {
+            const bergData = await fetchIcebergs(apiMonth);
+            // 업데이트 시간 저장 (클릭 팝업에서 사용)
+            if (bergData?.updated_at && viewer) {
+              viewer._bergUpdatedAt = bergData.updated_at;
             }
+            bergList = (bergData?.bergs || [])
+              .filter((b) => b.lat >= 0) // 북반구만
+              .map((b) => ({
+                id: b.id,
+                lon: b.lon,
+                lat: b.lat,
+                source: b.source || (isLive ? '' : 'archive'),
+                period: b.period || b.last_update || '',
+                length_m: b.length_m || 5000,
+                width_m: b.width_m || 2000,
+              }));
+          } catch (e) {
+            console.warn('[BergData] fetch 실패:', e.message);
+          }
 
-            // ── SAR-RL 콜라보: SAR YOLOv8 탐지 빙하 추가 병합 ────────────
+          if (isLive) {
+            // ── SAR-RL 콜라보: SAR YOLOv8 탐지 빙하 추가 병합 (Live 전용) ────────────
             // 신규 /api/collab/sar-icebergs 엔드포인트에서 가져옴.
             // 실패해도 기존 berg 흐름은 그대로 진행 (graceful).
             try {
@@ -2231,27 +2320,6 @@ function AppInner() {
             } catch (e) {
               console.warn('[SAR-RL] SAR 빙하 fetch 실패 (무시 — 기존 흐름 유지):', e.message);
             }
-          } else {
-            // 아카이브: 해당 월 고농도 셀(≥0.8) → 빙산 위치로 활용
-            const BERG_MAX = 300;
-            const highConc = icePoints.filter(
-              (c) => c.lat > 60 && c.weight >= 0.8,
-            );
-            const step =
-              highConc.length > BERG_MAX
-                ? Math.floor(highConc.length / BERG_MAX)
-                : 1;
-            bergList = highConc
-              .filter((_, i) => i % step === 0)
-              .slice(0, BERG_MAX)
-              .map((c) => ({
-                id: null,
-                lon: c.lon,
-                lat: c.lat,
-                source: 'archive',
-                length_m: 10000 + c.weight * 20000,
-                width_m: 5000 + c.weight * 10000,
-              }));
           }
 
           // 레이스 가드: berg/SAR fetch await 사이 더 최신 월 변경이 들어왔으면 렌더링 중단
@@ -2547,6 +2615,39 @@ function AppInner() {
     const key = `${Math.round(lat)},${Math.round(lon)}`;
     return grid.get(key) ?? 0;
   }, []);
+
+  // ── Live 모드 전방 프리뷰 ─────────────────────────────────────────────
+  // 선미추적(FOLLOW) 뷰에서 활성 항로 전방의 실측 빙상을 스캔(농도→추정두께→RIO)해
+  // ForwardPreviewHUD 히스토그램 + PASS/MARGINAL/BLOCKED 배지로 표시한다.
+  // 본선이 ~2km 이동(0.02°)하거나 침로가 ~2° 변할 때만 재계산해 매 프레임 churn 방지.
+  // (침로 양자화는 항로 이탈 시 heading 직선 투영이 회전에 반응하도록 포함)
+  const shipLatQ = state.shipState ? Math.round(state.shipState.lat * 50) / 50 : null;
+  const shipLonQ = state.shipState ? Math.round(state.shipState.lon * 50) / 50 : null;
+  const shipHdgQ =
+    state.shipState && Number.isFinite(state.shipState.heading)
+      ? Math.round(state.shipState.heading / 2) * 2
+      : null;
+  const liveForwardPreview = useMemo(() => {
+    if (voyageActive || state.currentMode !== 'FOLLOW') return [];
+    if (!state.shipState || shipLatQ === null) return [];
+    return deriveForwardPreviewLive(
+      activeWaypoints,
+      state.shipState,
+      state.shipSpecs?.iceClass || 'Arc4',
+      sampleIceFn,
+      { spanKm: 400, bars: 16 },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    voyageActive,
+    state.currentMode,
+    shipLatQ,
+    shipLonQ,
+    shipHdgQ,
+    activeWaypoints,
+    state.shipSpecs?.iceClass,
+    sampleIceFn,
+  ]);
 
   // ── 아라온 자동 호출(상황 인지) — 결빙수역 진입 시 1회 자동 호출 ────────
   //   무조건 호출이 아니라 본선이 결빙수역(SIC>0.3, RIO 위험 proxy)에 "진입"하는
@@ -3133,6 +3234,9 @@ function AppInner() {
   // (수동 호출/복귀 버튼은 평가 상태가 바뀌기 전까지 그대로 유지)
   const escortRequired = isArcticRoute && evalStatus === 'NSR_RESTRICTED';
   useEffect(() => {
+    escortRequiredRef.current = escortRequired;
+  }, [escortRequired]);
+  useEffect(() => {
     if (appMode !== 'live') return;
     if (escortRequired) callAraon();
     else recallAraon();
@@ -3405,6 +3509,14 @@ function AppInner() {
                 tHours={voyage.tHours}
               />
             </>
+          )}
+          {/* Live 모드 전방 프리뷰 — 선미추적 뷰에서 활성 항로 전방 빙상 스캔 */}
+          {!voyageActive && (
+            <ForwardPreviewHUD
+              visible={state.currentMode === 'FOLLOW'}
+              preview={liveForwardPreview}
+              live
+            />
           )}
           {/* 선미추적 미니 세계지도 — FOLLOW 뷰에서 지리적 맥락 제공 */}
           <FollowMiniMap

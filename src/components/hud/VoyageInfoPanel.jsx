@@ -537,23 +537,23 @@ export default function VoyageInfoPanel({
             <button
               type="button"
               onClick={araonControl.onCall}
-              disabled={araonControl.mode === 'active'}
+              disabled={araonControl.mode !== 'idle'}
               style={{
                 flex: 1,
                 padding: '5px 0',
                 borderRadius: 4,
                 fontSize: 11,
                 fontWeight: 700,
-                cursor: araonControl.mode === 'active' ? 'default' : 'pointer',
+                cursor: araonControl.mode !== 'idle' ? 'default' : 'pointer',
                 border: '1px solid rgba(239,68,68,0.6)',
                 background:
-                  araonControl.mode === 'active'
+                  araonControl.mode !== 'idle'
                     ? 'rgba(239,68,68,0.25)'
                     : 'rgba(239,68,68,0.85)',
-                color: araonControl.mode === 'active' ? '#fca5a5' : '#fff',
+                color: araonControl.mode !== 'idle' ? '#fca5a5' : '#fff',
               }}
             >
-              {araonControl.mode === 'active' ? '호출됨' : '🚨 호출'}
+              {araonControl.mode !== 'idle' ? '호출됨' : '🚨 호출'}
             </button>
             <button
               type="button"
@@ -574,7 +574,10 @@ export default function VoyageInfoPanel({
                 color: araonControl.mode === 'idle' ? '#93c5fd' : '#fff',
               }}
             >
-              {araonControl.mode === 'returning' ? '복귀 중' : '↩ 복귀'}
+              {araonControl.mode === 'returning' ||
+              araonControl.mode === 'transit-home'
+                ? '복귀 중'
+                : '↩ 복귀'}
             </button>
           </div>
         )}
