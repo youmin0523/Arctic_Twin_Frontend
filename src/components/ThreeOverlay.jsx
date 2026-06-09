@@ -1241,6 +1241,10 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
       const { scene } = ctx.current;
       if (!scene) return;
 
+      // 지형 높이 샘플러 무효화 — 실사(elev) 빌드 시에만 다시 설정.
+      //   (폴백/위성전용 빌드는 정확한 고도가 없어 카메라 클램프 비활성)
+      ctx.current.terrainSampler = null;
+
       // 이전 육지 정리 (재빌드 시 메모리 누수 방지 — 텍스처 포함)
       if (ctx.current.landGroup) {
         scene.remove(ctx.current.landGroup);
@@ -1337,6 +1341,17 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
         grp.add(new THREE.Mesh(geo, mat));
         scene.add(grp);
         ctx.current.landGroup = grp;
+        // 카메라용 지형 높이 샘플러: scene(x,z) → 역투영(lat/lon) → 지형 월드 Y.
+        //   ll()의 역함수. sx/sz/centerLat/centerLon/mPerDegLon 은 빌드 시점 값으로
+        //   고정(메시 정점이 절대 scene 좌표로 배치되므로 일치). 격자 밖/바다는 0.
+        ctx.current.terrainSampler = {
+          heightAtScene: (x, z) => {
+            const lon = centerLon + ((x - sx) * LAND_SCENE_SCALE) / mPerDegLon;
+            const lat = centerLat - ((z - sz) * LAND_SCENE_SCALE) / METERS_PER_DEGREE_LAT;
+            const h = elev.heightAt(lat, lon);
+            return h > SEA ? Math.max(3, h / LAND_SCENE_SCALE) : 0;
+          },
+        };
         console.info(`[land] REAL terrain N=${N} verts=${pos.length / 3}`);
         return;
       }
@@ -2931,11 +2946,21 @@ const ThreeOverlay = forwardRef(function ThreeOverlay(
             followHeightOffset +
             Math.sin(pitch) * dist * 0.5;
 
-          camera.position.set(
-            camX,
-            MathMax(SHIP_BASE_Y + followHeightOffset * 0.5, camY),
-            camZ,
-          );
+          // 기본 하한(선체 기준) 클램프
+          let finalCamY = MathMax(SHIP_BASE_Y + followHeightOffset * 0.5, camY);
+          // //* [Modified Code] 육지 밑으로 파고드는 버그 수정:
+          //   카메라 (camX,camZ) 지점의 지형 높이를 샘플링해 그 위로 끌어올린다.
+          //   (선박이 해안에 붙어 선미 카메라가 육지 위/뒤에 놓일 때 메시 아래로
+          //    들어가 육지 뒷면이 화면을 덮던 현상 제거)
+          const terrSampler = ctx.current.terrainSampler;
+          if (terrSampler) {
+            const terrY = terrSampler.heightAtScene(camX, camZ);
+            const TERRAIN_CLEARANCE = 60; // scene units (≈90m) 여유
+            if (terrY > 0 && finalCamY < terrY + TERRAIN_CLEARANCE) {
+              finalCamY = terrY + TERRAIN_CLEARANCE;
+            }
+          }
+          camera.position.set(camX, finalCamY, camZ);
           // //* [Modified Code] 정조준점을 선체 중앙(원점)이 아니라 "선미 거주구"로 이동.
           //   원점을 보면 선미의 가로 화면 위치 = sternWorld·sin(orbit.yaw) 만큼 옆으로 빠져
           //   컴퍼스 바늘(화면 중앙)과 선미가 어긋난다. 선미 지점(선박 축 +Z)을 직접 조준하면

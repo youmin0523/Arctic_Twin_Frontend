@@ -10,8 +10,8 @@
  *   · CCGS(캐나다)    — 빨간 선체 + 흰 전방 사선 스트라이프 + 흰 상부
  *   · 원자력(Rosatom) — 검은 선체 + 노란 상부 + 원자로 격납 블록
  *
- * Voyage Playback 모드의 entity (id='voyage-ib-araon') 와 충돌 방지를 위해
- * 별도 id 'live-ib-araon' 사용.
+ * Voyage Playback 모드의 entity (id='voyage-ib-*') 와 충돌 방지를 위해
+ * 별도 id 'live-ib-<assetId>' 사용(자산별 — 북극 함대 3척 동시 표시 대비).
  */
 
 import { useEffect, useRef } from 'react';
@@ -210,7 +210,7 @@ export default function AraonLiveMarker({ cesiumRef, visible, displayPos, asset 
       const initRot = -Cesium.Math.toRadians(displayPos?.heading || 0);
 
       entityRef.current = viewer.entities.add({
-        id: 'live-ib-araon',
+        id: `live-ib-${assetId}`,
         position: Cesium.Cartesian3.fromDegrees(initLon, initLat, 2000), // //* 반대 반구 비침 방지 부양
         billboard: {
           image: canvasRef.current,
