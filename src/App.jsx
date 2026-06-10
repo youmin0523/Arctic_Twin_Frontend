@@ -24,6 +24,7 @@ import TrendReportProgressOverlay from './components/hud/TrendReportProgressOver
 import TrendReportPanel from './components/hud/TrendReportPanel';
 import WhatIfPanel from './components/hud/WhatIfPanel';
 import FuelAnalysisPanel from './components/hud/FuelAnalysisPanel';
+import ChatPanel from './components/hud/ChatPanel';
 import Header from './components/layout/Header';
 import Sidebar from './components/layout/Sidebar';
 import TimelineBar from './components/layout/TimelineBar';
@@ -448,8 +449,10 @@ function AppInner() {
   }, []);
   const trendReportOpen = activePanel === 'trend_report';
   const fuelAnalysisOpen = activePanel === 'fuel';
+  const chatOpen = activePanel === 'chat';
   const toggleTrendReport = useCallback(() => handleSelectPanel('trend_report'), [handleSelectPanel]);
   const toggleFuelAnalysis = useCallback(() => handleSelectPanel('fuel'), [handleSelectPanel]);
+  const toggleChat = useCallback(() => handleSelectPanel('chat'), [handleSelectPanel]);
 
   // 토스트 알림 상태
   const [toastMsg, setToastMsg] = useState('');
@@ -3751,6 +3754,7 @@ function AppInner() {
           {activePanel === 'whatif' && (
             <WhatIfPanel route={state.currentRouteKey} iceClass={state.shipSpecs?.iceClass || 'PC5'} />
           )}
+          <ChatPanel open={chatOpen} onToggle={toggleChat} shipSpec={state.shipSpecs} />
         </div>
 
         {/* ═══ Right Sidebar — 좌측 Sidebar와 대칭 구조 (static flex item) ═══ */}
