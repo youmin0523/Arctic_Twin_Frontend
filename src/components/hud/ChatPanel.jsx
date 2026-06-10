@@ -29,7 +29,11 @@ function genSessionId() {
 
 // 간단 링크 렌더: 메시지에 href 있으면 앵커, 없으면 텍스트
 function MessageText({ text }) {
-  return <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</span>;
+  return (
+    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', WebkitUserSelect: 'text' }}>
+      {text}
+    </span>
+  );
 }
 
 export default function ChatPanel({ open, onToggle, shipSpec }) {
@@ -276,15 +280,18 @@ export default function ChatPanel({ open, onToggle, shipSpec }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
+            // 전역 시뮬레이션 키 핸들러로 이벤트가 전파돼 Space/WASD 가 삼켜지지 않도록 차단
+            e.stopPropagation();
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
           }}
+          onKeyUp={(e) => e.stopPropagation()}
           placeholder="북극항로에 대해 물어보세요… (Shift+Enter 줄바꿈)"
           rows={1}
           style={{
             flex: 1, resize: 'none', maxHeight: 90, padding: '8px 10px',
             background: '#0f172a', border: '1px solid #1e3a8a', borderRadius: 6,
             color: '#dbeafe', fontSize: 12, fontFamily: 'inherit', lineHeight: 1.4,
-            outline: 'none',
+            outline: 'none', userSelect: 'text', WebkitUserSelect: 'text',
           }}
         />
         <button
