@@ -82,6 +82,7 @@ export default function FuelAnalysisPanel({ open, onToggle, currentRoute, shipSp
           suez_distance_nm: 12400,
           vessel_type: vessel.key,
           speed_knots: speed,
+          route,  // 호위비 자국(NSR=아라온)/타국(NWP·TSR) 분기용
         }),
       });
       const data = await res.json();
