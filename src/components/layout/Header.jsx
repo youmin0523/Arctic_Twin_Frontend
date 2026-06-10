@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './Header.css';
 
 const NAV_ITEMS = [
+  { id: 'chat',           label: 'AI CHAT',           short: 'CHAT' },
   { id: 'whatif',         label: 'WHAT-IF SCENARIO',  short: 'WHAT-IF' },
   { id: 'trend_report',   label: 'TREND REPORT',      short: 'TREND' },
   { id: 'fuel',           label: 'FUEL ANALYSIS',     short: 'FUEL' },
