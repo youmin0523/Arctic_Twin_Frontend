@@ -11,6 +11,14 @@ import { useAppState, useDispatch } from '../context/AppContext';
  * without triggering re-renders every frame.
  */
 
+// 입력 가능한 요소(텍스트 입력·textarea·select·contenteditable)에 포커스가 있는지 판정.
+// 이 경우 전역 시뮬레이션 키 핸들러가 키 입력을 가로채/차단하지 않아야 한다.
+function isEditableTarget(t) {
+  if (!t) return false;
+  const tag = t.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable === true;
+}
+
 // Key codes that should have their default browser behaviour suppressed
 const PREVENTED_KEYS = new Set([
   'KeyW',
@@ -54,6 +62,10 @@ export default function useManualControl() {
   // ── keydown handler ────────────────────────────────────────────────────────
   const handleKeyDown = useCallback(
     (e) => {
+      // 입력 필드(채팅 textarea·검색·날짜 등)에 포커스가 있으면 시뮬레이션 키를
+      // 캡처/차단하지 않는다. (전역 preventDefault 가 Space·WASD 등 타이핑을 삼키는 버그 방지)
+      if (isEditableTarget(e.target)) return;
+
       keysRef.current[e.code] = true;
 
       // Prevent default scrolling / page actions for simulation keys
@@ -76,6 +88,8 @@ export default function useManualControl() {
   // ── keyup handler ──────────────────────────────────────────────────────────
   const handleKeyUp = useCallback(
     (e) => {
+      if (isEditableTarget(e.target)) return;
+
       keysRef.current[e.code] = false;
 
       // Release binoculars when B is released
