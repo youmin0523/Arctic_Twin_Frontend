@@ -4,8 +4,9 @@
 해빙 농도·빙산·항로·기상을 실시간 시각화하고, 강화학습 빙산 회피·출항 스케줄링·연료 예측·
 What-If 분석 결과를 인터랙티브하게 보여줍니다.
 
-- **Live**: 추후 업데이트 예정 (Vercel)
-- **백엔드 API**: 별도 레포의 Node/Python 백엔드 (로컬은 포트 8000, 배포는 AWS/HF)
+- **Live**: https://arctictwin.com (Vercel)
+- **저장소**: [youmin0523/Arctic_Twin_Frontend](https://github.com/youmin0523/Arctic_Twin_Frontend)
+- **백엔드 API**: 별도 레포 [youmin0523/Arctic_Twin_Backend](https://github.com/youmin0523/Arctic_Twin_Backend) 의 Node/Python 백엔드 (로컬은 포트 8000, 배포는 AWS)
 
 ---
 
@@ -32,7 +33,8 @@ What-If 분석 결과를 인터랙티브하게 보여줍니다.
 ### 실행
 
 ```bash
-cd frontend
+git clone https://github.com/youmin0523/Arctic_Twin_Frontend.git
+cd Arctic_Twin_Frontend
 npm install
 npm run dev        # → http://localhost:5173
 ```
