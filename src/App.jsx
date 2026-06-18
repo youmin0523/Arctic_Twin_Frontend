@@ -3112,6 +3112,9 @@ function AppInner() {
       hasNavigator: checks.navigator,
       isSanctioned: checks.sanctioned,
       isColdRoute: checks.coldRoute,
+      // 극지 통신 보유 = LEO 위성통신(Iridium/Starlink)으로 간주.
+      // (GEO면 NSR 최고위도 ~78°N ≥ 75° 구간에서 Step 3d "통신 불가" 우회 발생)
+      commsType: checks.comms ? 'LEO' : 'GEO',
     });
 
     // 항로 변경 필요 여부 확인 — 평가 대상인 "목표 항로"(designRouteKey) 기준
