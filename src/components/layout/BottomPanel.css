@@ -24,15 +24,16 @@
   padding: 0;
 }
 
-/* Ice는 컨텐츠가 가벼워 좁게, Design은 2열 grid 수용, Service는 넓게 */
+/* Ice는 게이지+2스택+카드로 가로 폭이 빠듯 → 폭 상향.
+   Service는 여유가 많아 그만큼 양보(합계 3.8 유지 → Design 폭은 불변). */
 .bp-panel--triple > .bp-section:nth-child(1) {
-  flex: 0.85 1 0;
+  flex: 1 1 0;
 }
 .bp-panel--triple > .bp-section:nth-child(3) {
   flex: 1.25 1 0;
 }
 .bp-panel--triple > .bp-section:nth-child(5) {
-  flex: 1.7 1 0;
+  flex: 1.55 1 0;
 }
 
 .bp-section {
@@ -157,7 +158,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
   line-height: 1.35;
   padding: 1px 0;
@@ -182,7 +183,7 @@
 /* ── Cards ── */
 .bp-cards {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   align-items: center;
   align-content: center;
@@ -191,12 +192,12 @@
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 1px;
-  min-width: 60px;
+  min-width: 54px;
 }
 .bp-card__label {
   color: var(--text-muted);
@@ -248,10 +249,10 @@
   color: var(--accent);
 }
 
-/* 필드 grid: 넓으면 2열, 좁으면 1열 자동 전환 */
+/* 필드 grid: 항상 2열 고정(좁아도 1열로 무너지지 않게) → 세로 높이 절약 */
 .bp-design__fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 10px;
   row-gap: 3px;
   align-items: center;
