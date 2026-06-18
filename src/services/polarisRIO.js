@@ -140,7 +140,10 @@ export function deriveIceConditions(lon, lat, sampleIceConcentration) {
 // //* [Modified Code] UI 가이드 및 재사용을 위해 핵심 기항 상수를 상단으로 추출 및 Export
 // (하위호환·UI 툴팁용 — NSR 기준 기본값. 항로별 임계값은 ROUTE_POLAR_PROFILES 참조)
 export const NSR_MAX_DRAFT = 12.5;
-export const NSR_MAX_BEAM = 35.0;
+// 현대 Arc7 쇄빙 LNG선(Christophe de Margerie/야말막스급 ~50m)·아프라막스 탱커(~44m)가
+// NSR을 독립 쇄빙·호송 혼용으로 실제 운항. 좁은 해협의 실질 제약은 폭이 아니라 수심(흘수)이므로
+// 선폭 한계를 50m로 둔다. (구 35m는 아르티카급 쇄빙선 채널폭 기준의 과소 추정치였음)
+export const NSR_MAX_BEAM = 50.0;
 export const MIN_RESCUE_DAYS = 5;
 export const MIN_TEMP_MARGIN = 10.0;
 
@@ -171,7 +174,7 @@ export const ROUTE_POLAR_PROFILES = {
     requiresNsraPermit: true,    // 러 NSR 항행규칙: NSRA 허가(입역 15영업일~120일 전 신청)
     sanctionReroute: 'CAPE',     // 대러 제재 참여국 선적 → 희망봉 우회
     maxDraft: NSR_MAX_DRAFT,     // 12.5m — Sannikov 해협 ~13m / Dmitry Laptev 6.7m(연안항로)
-    maxBeam: NSR_MAX_BEAM,       // 35m — 러 원자력쇄빙선(Arktika급 ~34m) 호송 수로
+    maxBeam: NSR_MAX_BEAM,       // 50m — 야말막스급 쇄빙 LNG선(~50m)·아프라막스(~44m) 실운항 반영
     minRescueDays: MIN_RESCUE_DAYS, // 5일 — Polar Code METR 최소
     minTempMargin: MIN_TEMP_MARGIN, // 10°C — Polar Code PST(최저 MDLT 대비 ≥10°C)
     commsLatThreshold: 75.0,     // GEO 앙각 한계(~76°N) 고려 — 고위도 LEO 필요
