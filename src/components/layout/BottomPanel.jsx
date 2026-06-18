@@ -15,7 +15,9 @@ const DEFAULT_CHECKS = {
   pwom: true,
   nsra: true,
   winter: true,
-  zeroDis: false,
+  // 무배출 탱크/생존 장비 — NSR 운항 선박은 Polar Code 상 기본 구비.
+  // (false면 Step 3c "필수 설비 미비"로 모든 선박이 수에즈로 우회됨)
+  zeroDis: true,
   comms: true,
   navigator: true,
   sanctioned: false,
